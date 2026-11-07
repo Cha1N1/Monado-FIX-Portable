@@ -49,6 +49,33 @@ static int held_key(int sc) {
 }
 static int held_slot(int i) { return held_key(g_bind_key[i]) || held_key(g_bind_key2[i]); }
 
+// [XCDE] T266: the middle button's stick click, a pulse of RCLICK_MS from the press (SDL ticks, ms)
+#define RCLICK_MS 100
+static _Atomic uint64_t rclick_until;
+// [XCDE] T267: the direct mouse camera (runtime/hle/party.c) can't turn the camera while the game itself drives the yaw
+// (after the R3 camera reset it re-centres every frame until the right stick moves). Then the mouse goes through the
+// right stick for CAM_FALLBACK_MS: the game sees stick input, leaves the reset, and the mouse turns it as before.
+#define CAM_FALLBACK_MS 1500
+static _Atomic uint64_t cam_fallback_until;
+void input_mouse_fallback(void) { cam_fallback_until = SDL_GetTicks() + CAM_FALLBACK_MS; }
+// [XCDE] T267: the wheel zooms the camera (ZL held + the right stick up / down - the game's own zoom) when nothing is
+// bound to it. XCDE_WHEEL_ZOOM=0 turns it off, =-1 swaps the direction.
+#define ZOOM_MS 110
+static _Atomic uint64_t zoom_until;
+static _Atomic int zoom_dir;
+static int wheel_zoom_mode(void) {
+    static int m = 99;
+    if (m == 99) { const char *e = getenv("XCDE_WHEEL_ZOOM"); m = e ? atoi(e) : 1; }
+    return m;
+}
+static bool wheel_is_bound(void) {
+    for (int i = 0; i < BIND_KEY_COUNT; i++)
+        if (g_bind_key[i] == BIND_WHEEL_UP || g_bind_key[i] == BIND_WHEEL_DOWN ||
+            g_bind_key2[i] == BIND_WHEEL_UP || g_bind_key2[i] == BIND_WHEEL_DOWN) return true;
+    return false;
+}
+static uint64_t rclick_pulse(void) { return SDL_GetTicks() < rclick_until ? 1ull << BTN_RSTICK : 0; }
+
 // [XCDE] keyboard / mouse actions, on their press: the arts palette (runtime/hle/party.c art macro) and the party switch
 static void action_press(int i) {
     extern bool menu_input_captured(void);
@@ -68,6 +95,21 @@ static void recompute_keyboard(void) {
     uint64_t b = 0;
     for (int i = 0; i < BIND_PAD_COUNT; i++)
         if (held_slot(i)) b |= 1ull << i;
+    // T264 / T266: the middle button's stick click is a short pulse (rclick_pulse), never held, and never together
+    // with ZL (keyboard or controller): ZL + R3 left the guest camera locked behind the player (yaw re-centred
+    // every frame, only the pitch free).
+    static XcdeStickClick mid_click;
+    int zl = g_bind_key[BIND_ZL], zl_alt = g_bind_key2[BIND_ZL];
+    int click = g_bind_key[BIND_RSTICK], click_alt = g_bind_key2[BIND_RSTICK];
+    bool middle_is_click = click == BIND_MOUSE_MIDDLE || click_alt == BIND_MOUSE_MIDDLE;
+    bool zl_held = held_key(zl) || held_key(zl_alt) || (pad_buttons >> BTN_ZL & 1);
+    int edge = xcde_stick_click_edge(&mid_click, middle_is_click && held_key(BIND_MOUSE_MIDDLE), zl_held);
+    if (edge > 0) rclick_until = SDL_GetTicks() + RCLICK_MS;
+    else if (edge < 0) rclick_until = 0;
+    bool alternate = (click != BIND_MOUSE_MIDDLE && held_key(click)) ||
+                     (click_alt != BIND_MOUSE_MIDDLE && held_key(click_alt));
+    b &= ~(1ull << BTN_RSTICK);  // (the middle button comes through rclick_pulse; the other key as a held click)
+    if (alternate) b |= 1ull << BTN_RSTICK;
     key_buttons = b;
     key_lx = (held_slot(BIND_LS_RIGHT) - held_slot(BIND_LS_LEFT)) * 32767;
     key_ly = (held_slot(BIND_LS_UP) - held_slot(BIND_LS_DOWN)) * 32767;
@@ -134,7 +176,8 @@ static bool mouse_take(uint64_t frame, float *dx, float *dy) {
 // in control - the pixels it took. Elsewhere (menus, cutscenes) the mouse goes through the right stick (mouse_stick).
 bool input_mouse_on(void) {
     if (mouse_test_n < 0) { float x, y; mouse_take(~0ull, &x, &y); atomic_fetch_add(&mouse_dx, (int32_t)(x * 16)), atomic_fetch_add(&mouse_dy, (int32_t)(y * 16)); }
-    return g_mouse_look && (mouse_looking || mouse_test_n > 0);
+    return g_mouse_look && (mouse_looking || mouse_test_n > 0) && SDL_GetTicks() >= cam_fallback_until &&
+           SDL_GetTicks() >= rclick_until + CAM_FALLBACK_MS;  // (T267: not just after a camera reset)
 }
 bool input_mouse_take(uint64_t frame, float *dx, float *dy) {
     if (!g_mouse_look) return false;
@@ -232,6 +275,7 @@ void input_reset(void) {
     memset(keys_down, 0, sizeof keys_down);
     memset(mouse_down, 0, sizeof mouse_down);
     mouse_look_set(false);
+    rclick_until = 0;
     recompute_keyboard();
 }
 
@@ -308,6 +352,14 @@ void input_handle_event(const SDL_Event *e) {
     switch (e->type) {
     case SDL_EVENT_KEY_DOWN: case SDL_EVENT_KEY_UP:
         if (e->type == SDL_EVENT_KEY_DOWN && e->key.scancode == SDL_SCANCODE_F9 && !e->key.repeat) g_debug_frame_request = 1;
+        if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat) {  // [HUNT] modo caceria de shaders (exec.c): F5 parar, F6 / F7 anterior / siguiente (Shift: 10), F8 guardar
+            extern volatile int g_hunt_step, g_hunt_save, g_hunt_reset;
+            int hs = (e->key.mod & SDL_KMOD_SHIFT) ? 10 : 1;
+            if (e->key.scancode == SDL_SCANCODE_F7) g_hunt_step += hs;
+            else if (e->key.scancode == SDL_SCANCODE_F6) g_hunt_step -= hs;
+            else if (e->key.scancode == SDL_SCANCODE_F8) g_hunt_save = 1;
+            else if (e->key.scancode == SDL_SCANCODE_F5) g_hunt_reset = 1;
+        }
         if (e->type == SDL_EVENT_KEY_DOWN && e->key.scancode == SDL_SCANCODE_F10 && !e->key.repeat) {  // [XCDE] T224 recorder
             extern void vk_rec_toggle(void);
             vk_rec_toggle();
@@ -332,6 +384,10 @@ void input_handle_event(const SDL_Event *e) {
             wheel_until[!up] = SDL_GetTicks() + WHEEL_MS;
             for (int i = BIND_ART1; i < BIND_KEY_COUNT; i++)  // (actions: one per notch)
                 if (g_bind_key[i] == (up ? BIND_WHEEL_UP : BIND_WHEEL_DOWN) || g_bind_key2[i] == (up ? BIND_WHEEL_UP : BIND_WHEEL_DOWN)) action_press(i);
+            if (wheel_zoom_mode() && !wheel_is_bound()) {
+                zoom_dir = (up ? 1 : -1) * (wheel_zoom_mode() < 0 ? -1 : 1);
+                zoom_until = SDL_GetTicks() + ZOOM_MS;
+            }
             recompute_keyboard();
         }
         break;
@@ -345,6 +401,7 @@ void input_handle_event(const SDL_Event *e) {
     case SDL_EVENT_WINDOW_FOCUS_LOST:
         memset(mouse_down, 0, sizeof mouse_down);
         mouse_look_set(false);
+        recompute_keyboard();
         break;
     case SDL_EVENT_GAMEPAD_ADDED:
         if (!pad) { pad = SDL_OpenGamepad(e->gdevice.which); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
@@ -581,7 +638,7 @@ static uint64_t wheel_buttons(void) {
     return b;
 }
 
-uint64_t input_buttons_now(void) { return (menu_input_captured() ? 0 : key_buttons | pad_buttons | lt_pulse() | wheel_buttons()) | script_buttons; }
+uint64_t input_buttons_now(void) { return (menu_input_captured() ? 0 : key_buttons | pad_buttons | lt_pulse() | wheel_buttons() | rclick_pulse()) | script_buttons; }
 
 static int32_t clamp_axis(int32_t v) { return v > 32767 ? 32767 : v < -32767 ? -32767 : v; }
 
@@ -622,7 +679,7 @@ static void fill_state(Cpu *c) {
         LOG("[input] watching controller object %llx\n", c->x[1] - 8);
     }
     bool menu = menu_input_captured();  // the overlay menu / name entry has the controls (typing there isn't for the game)
-    uint64_t b = menu ? script_buttons : key_buttons | pad_buttons | lt_pulse() | wheel_buttons() | script_buttons;
+    uint64_t b = menu ? script_buttons : key_buttons | pad_buttons | lt_pulse() | wheel_buttons() | rclick_pulse() | script_buttons;
     {   // injected Plus: held for ~10 presented frames (the game polls several times per frame)
         extern uint64_t renderer_present_count(void);
         static uint64_t until;
@@ -632,6 +689,7 @@ static void fill_state(Cpu *c) {
     int32_t lx = clamp_axis((menu ? 0 : key_lx + pad_lx) + script_lx), ly = clamp_axis((menu ? 0 : key_ly + pad_ly) + script_ly);
     int32_t mrx = 0, mry = 0;
     if (!menu) mouse_stick(&mrx, &mry);  // [XCDE] mouse camera
+    if (!menu && SDL_GetTicks() < zoom_until) b |= 1ull << BTN_ZL, mry += zoom_dir * 32767;  // [XCDE] T267: wheel zoom
     int32_t rx = clamp_axis((menu ? 0 : key_rx + pad_rx + mrx) + script_rx), ry = clamp_axis((menu ? 0 : key_ry + pad_ry + mry) + script_ry);
     extern bool mirror_input(void);  // mirror mode, the world on screen (runtime/hle/mirror.c): left and right swap
     bool mirrored = !menu && mirror_input();

@@ -14,6 +14,7 @@
 #include "../../settings.h"
 #include "../../ui/menu.h"
 #include "vk.h"
+#include "temporal.h"
 #include "../../render_policy.h"
 #include "../../native_intervals.h"
 #include "gpu_probe.h"
@@ -474,7 +475,6 @@ static void create_device(void) {
     if (!legacy && g_vk.props.vendorID == 0x10de) {   // [XCDE] DLSS: the device for Streamline; its swapchain proxies
         extern void dlss_device_created(VkInstance inst, VkPhysicalDevice phys, VkDevice dev, uint32_t qfam);
         dlss_device_created(g_vk.inst, g_vk.phys, g_vk.dev, g_vk.qfam);
-        sc_proxies();
     }
 
     VmaAllocatorCreateInfo ai = {.physicalDevice = g_vk.phys, .device = g_vk.dev, .instance = g_vk.inst,
@@ -879,6 +879,23 @@ static float g_shot_crop[4] = {0, 0, 1, 1};
 static double last_fps_time;
 static NvnTexture *g_last_presented;
 
+// T265: the guest confirms a perspective camera before subsequent frames use reshaped targets.
+static atomic_bool aspect_probe, aspect_camera_seen;
+static _Atomic float aspect_for_render;
+
+uint32_t vk_scene_aspect(uint32_t original, uint32_t camera) {
+    if (camera != 0 || !atomic_load(&aspect_probe)) return original;
+    float guest_aspect;
+    memcpy(&guest_aspect, &original, sizeof guest_aspect);
+    if (!(fabsf(guest_aspect - 16.0f / 9.0f) < 0.01f)) return original;
+    extern bool xcde_movie_playing(void);
+    if (xcde_movie_playing()) return original;
+    atomic_store(&aspect_camera_seen, true);
+    float aspect = atomic_load(&aspect_for_render);
+    if (aspect > 0) memcpy(&original, &aspect, sizeof original);
+    return original;
+}
+
 const float *vk_shot_crop(void) { return g_shot_crop; }
 
 void backend_present(NvnTexture *t);
@@ -1215,23 +1232,41 @@ void backend_present(NvnTexture *t) {
     }
     double vx = 0, vy = 0, vw = 0, vh = 0;  // the game image's placement in the window
     float crop[4] = {0, 0, 1, 1};           // uv origin and size
+    bool aspect_changed = false;
     if (have || !want_window) {  // (headless frames still advance the scale / widescreen state as a presented one would)
         double dw = g_vk.sc_extent.width, dh = g_vk.sc_extent.height;
         extern void widescreen_frame_end(uint64_t frame);
         widescreen_frame_end(total_frames);
         extern void widescreen_set_factor(float f);
-        extern bool widescreen_allowed(void);
-        // render scale + placement in the window: runtime/nvn/output_scale.c (Video tab "Internal resolution");
-        // no GPU timer here (-1): dynamic resolution goes by the frame time
+        double ratio = dw / dh;
+        bool probe = g_settings.aspect == ASPECT_UNLOCKED && ratio >= 4.0 / 3.0 - 0.005 &&
+                     ratio <= 32.0 / 9.0 + 0.005 && fabs(ratio / (16.0 / 9.0) - 1.0) > 0.005 &&
+                     !getenv("LARECOMP_NO_SCALE");
+        bool was_probing = atomic_load(&aspect_probe);
+        bool scene = (probe || was_probing) && atomic_exchange(&aspect_camera_seen, false);
+        float old_aspect = atomic_load(&aspect_for_render);
         OutScale os;
-        output_scale(dw, dh, widescreen_allowed(), SDL_GetTicksNS() / 1e9, vk_native_gpu_ms(), &os);
+        output_scale(dw, dh, probe && scene, SDL_GetTicksNS() / 1e9, vk_native_gpu_ms(), &os);
         double sx = os.sx, sy = os.sy, shape = os.shape;
         vx = os.vx, vy = os.vy, vw = os.vw, vh = os.vh;
         // interiors / dungeons: their 16:9 centre, or the part inside a room wider than one screen
         extern void widescreen_present_crop(uint64_t, double, float *, double *, double *, double *, double *);
         widescreen_present_crop(total_frames, shape, crop, &vx, &vy, &vw, &vh);
         widescreen_set_factor((float)shape);
+        float next_aspect = probe && scene && shape != 1.0 ? (float)(shape * (16.0 / 9.0)) : 0;
+        aspect_changed = old_aspect != next_aspect;
+        if (aspect_changed) {
+            // This image was rendered before the next scale took effect. Fit its previous shape.
+            double rendered_aspect = old_aspect > 0 ? old_aspect : 16.0 / 9.0;
+            vw = fmin(dw, dh * rendered_aspect);
+            vh = vw / rendered_aspect;
+            vx = (dw - vw) * 0.5;
+            vy = (dh - vh) * 0.5;
+            LOG("[aspect] next scene aspect %.4f (0 = original)\n", next_aspect);
+        }
         renderer_set_scale((float)sx, (float)sy);
+        if (aspect_changed) atomic_store(&aspect_for_render, next_aspect);
+        if (probe != was_probing) atomic_store(&aspect_probe, probe);
         memcpy(g_shot_crop, crop, sizeof crop);
     }
     if (have) {
@@ -1278,6 +1313,7 @@ void backend_present(NvnTexture *t) {
         renderer_submit();
     }
     extern void vk_prof_frame(uint64_t frame, uint64_t present_ns);
+    if (aspect_changed) tmp_reset_history();
     vk_prof_frame(total_frames, SDL_GetTicksNS() - t0);
     xcde_native_interval(total_frames,SDL_GetTicksNS(),g_vk.props.deviceName,g_vk.props.driverVersion,xshot!=NULL || shot);
     vk_metrics_frame(total_frames, SDL_GetTicksNS(), SDL_GetTicksNS()-t0);
@@ -1452,12 +1488,19 @@ void ui_window_init(void) {
         dlss_init_early();
     }
     create_instance();
-    extern bool dlss_create_surface(void *window, VkInstance instance, VkSurfaceKHR *surface);
-    if (!dlss_create_surface(window, g_vk.inst, &g_vk.surface) && !SDL_Vulkan_CreateSurface(window, g_vk.inst, NULL, &g_vk.surface)) FATAL("SDL_Vulkan_CreateSurface: %s\n", SDL_GetError());
+    if (!SDL_Vulkan_CreateSurface(window, g_vk.inst, NULL, &g_vk.surface)) FATAL("SDL_Vulkan_CreateSurface: %s\n", SDL_GetError());
     pick_device();
     { extern void dlss_validate_adapter(VkPhysicalDevice phys, uint32_t api, uint32_t qfam);
       dlss_validate_adapter(g_vk.phys, g_vk.api_version, g_vk.qfam); }
     create_device();
+    extern bool dlss_create_surface(void *window, VkInstance instance, VkPhysicalDevice phys,
+                                    uint32_t qfam, VkSurfaceKHR *surface);
+    VkSurfaceKHR hooked_surface;
+    if (dlss_create_surface(window, g_vk.inst, g_vk.phys, g_vk.qfam, &hooked_surface)) {
+        SDL_Vulkan_DestroySurface(g_vk.inst, g_vk.surface, NULL);
+        g_vk.surface = hooked_surface;
+        sc_proxies();
+    }
     if (g_settings.upscaler_auto || g_settings.upscaler == UPSCALE_DLSS) {
         extern bool dlss_available(void);
         g_settings.upscaler = dlss_available() ? UPSCALE_DLSS : UPSCALE_FSR1;

@@ -23,6 +23,17 @@ __declspec(dllexport) DWORD NvOptimusEnablement = 1;
 __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 #endif
 
+// T265: the same lifted camera code is also linked into the headless host.
+uint32_t xcde_scene_aspect(uint32_t original, uint32_t camera) {
+#if defined(XCDE_GFX) && defined(_WIN32)
+    extern uint32_t vk_scene_aspect(uint32_t original, uint32_t camera);
+    return vk_scene_aspect(original, camera);
+#else
+    (void)camera;
+    return original;
+#endif
+}
+
 static void run_array(Cpu *c, uint64_t arr, uint64_t size) {
     for (uint64_t i = 0; i < size / 8; i++) {
         uint64_t fn = ((uint64_t *)arr)[i];

@@ -3,7 +3,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools", "lifter"))
-from patchfmt import Patch  # noqa: E402,F401
+from patchfmt import JumpTable, Patch  # noqa: E402,F401
 
 
 def _hook_then_original(fn):
@@ -53,3 +53,17 @@ def _thumb_loaded(gen, addr):
 
 
 PATCHES[0x700057dab4] = Patch(0x940ce425, _thumb_loaded, 'T222', 'bl memcpy - slot thumbnail picture loaded (f_700057da00)')
+
+# T262: Colony 9 affinity chart. The byte-offset switch crosses lifter partitions.
+PATCHES[0x7000183f48] = JumpTable(
+    '7e1df8e08d60544bbdca1e333c153c97', 0xd61f0140, 0x9d5324, 0x7000183f4c,
+    (0x7000183f4c, 0x7000183f94, 0x7000183fb8, 0x7000183fdc, 0x7000183f70), 'T262',
+)
+
+# T265: the main perspective camera stores width / height before calculating both projection and culling.
+def _scene_aspect(gen, addr):
+    return ('{ extern uint32_t xcde_scene_aspect(uint32_t, uint32_t); '
+            'ST32(c->x[19] + 0x4c0, xcde_scene_aspect((uint32_t)c->v[4], (uint32_t)c->x[20])); }')
+
+
+PATCHES[0x70006f7ea0] = Patch(0xbd04c264, _scene_aspect, 'T265', 'store scene projection aspect')

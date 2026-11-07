@@ -15,6 +15,7 @@ typedef struct {
 
 bool tmp_enabled(void);         // the option is on, a temporal upscaler is usable and this run isn't deterministic
 void tmp_jitter(float j[2]);
+void tmp_reset_history(void);
 void tmp_hud_snapshot(VkCommandBuffer cb, TexBackend *b);
 bool tmp_hud_started(void);
 void tmp_set_velocity(TexBackend *v);  // [XCDE] T215: the game's own velocity buffer this frame (G-buffer, RGB10A2)

@@ -34,6 +34,23 @@ enum {
     BIND_WHEEL_UP, BIND_WHEEL_DOWN,
     BIND_MOUSE_END
 };
+// T264: releasing ZL must not re-trigger a suppressed middle-button click.
+static inline bool xcde_mouse_stick_click(bool *suppressed, bool middle, bool keyboard_zl, bool alternate) {
+    *suppressed = middle && (*suppressed || keyboard_zl);
+    return alternate || (middle && !*suppressed);
+}
+// T266: the middle button is a stick click (R3 = the game's camera reset) - sent as a short PULSE on the press, not
+// held. Held, the game kept re-centring the yaw for as long as the button was down (camera stuck behind the player,
+// only up / down free). With ZL held the click is dropped for the whole press, and a press already begun is cut.
+typedef struct { bool suppressed, was_ok; } XcdeStickClick;
+// -> 1: start a pulse (a fresh, allowed press), -1: cancel the running one, 0: nothing
+static inline int xcde_stick_click_edge(XcdeStickClick *s, bool middle, bool zl_held) {
+    s->suppressed = middle && (s->suppressed || zl_held);
+    bool ok = middle && !s->suppressed;
+    int r = ok && !s->was_ok ? 1 : !ok && s->was_ok ? -1 : 0;
+    s->was_ok = ok;
+    return r;
+}
 // Mouse camera: the mouse moves the camera (the right stick) with the right button held (xcde.ini mouse_look = 1) or
 // always (2: the cursor captured); 0 off. mouse_sens = 1..100, mouse_invert = 0 / 1.
 extern int g_mouse_look, g_mouse_sens;

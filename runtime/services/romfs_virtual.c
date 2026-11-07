@@ -106,6 +106,8 @@ static void maybe_edit(File *f) {
     if (!g_settings.game_blur) strcat(edits, "AntiAliasing=off,tmaa=off,blur2=off,furBlur=off");
     // [XCDE] FSR 3 / DLSS replace the game's own anti-aliasing (its temporal AA would blur their jittered input)
     else if (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS) strcat(edits, "AntiAliasing=off,tmaa=off");
+    // [XCDE] xcde.ini taa = 0: only the game's temporal AA (tmaa) off; its other AA and motion blur stay as set above
+    if (g_settings.taa_off) { if (*edits) strcat(edits, ","); strcat(edits, "tmaa=off"); }
     // T259: opt-in, whitelisted cosmetic edits. Mods are read first; explicit diagnostic edits below win.
     static const char *effect_keys[]={"tssao=off", "ssr=off", "bloom=off", "godray=off", "shadowCloud=off"};
     for (unsigned i=0;i<5;i++) if (g_settings.effects_off&(1u<<i)) {

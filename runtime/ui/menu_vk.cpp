@@ -171,6 +171,7 @@ static const char *const k_en[][2] = {
     {"Calidad", "Quality"}, {"Antialiasing SMAA", "SMAA anti-aliasing"}, {"(no se usa con FSR 3.1 / DLSS)", "(not used with FSR 3.1 / DLSS)"},
     {"Profundidad de campo", "Depth of field"},
     {"Antialiasing y desenfoque de movimiento del juego (al reiniciar)", "The game's anti-aliasing and motion blur (after a restart)"},
+    {"Antialiasing temporal (TAA) del juego (al reiniciar)", "The game's temporal anti-aliasing (TAA) (after a restart)"},
     {"Mostrar FPS en la barra de título", "Show FPS in the title bar"}, {"Velocidad", "Speed"}, {"30 (como en Switch)", "30 (like Switch)"},
     {"Sin límite", "Unlímited"}, {"FPS (al reiniciar)", "FPS (after a restart)"}, {"V-Sync (con 30 / 60 FPS)", "V-Sync (at 30 / 60 FPS)"},
     {"Volumen", "Volume"}, {"Audio de los vídeos (al reiniciar)", "Video sound (after a restart)"}, {"Controles", "Controls"},
@@ -215,6 +216,9 @@ static void ui(void) {
             quality_before=g_settings;
             ImGui::SeparatorText(T("Pantalla"));
             if (ImGui::Checkbox(T("Pantalla completa"), &g_settings.fullscreen)) want_window = true;
+            const char *aspects[] = {g_settings.ui_lang ? "Automatic" : "Automático",
+                                     g_settings.ui_lang ? "Original 16:9" : "16:9 original"};
+            monado_combo(g_settings.ui_lang ? "Aspect ratio" : "Relación de aspecto", &g_settings.aspect, aspects, 2);
             ImGui::SeparatorText(T("Resolución y escalado"));
             int ri = 0;
             for (int i = 0; i < 7; i++) if (k_res_mode[i] == g_settings.res_mode) ri = i;
@@ -250,6 +254,8 @@ static void ui(void) {
             bool dof = !g_settings.dof_off;
             if (ImGui::Checkbox(T("Profundidad de campo"), &dof)) g_settings.dof_off = !dof;
             ImGui::Checkbox(T("Antialiasing y desenfoque de movimiento del juego (al reiniciar)"), &g_settings.game_blur);
+            bool taa = !g_settings.taa_off;
+            if (ImGui::Checkbox(T("Antialiasing temporal (TAA) del juego (al reiniciar)"), &taa)) g_settings.taa_off = !taa;
             ImGui::Checkbox(g_settings.ui_lang ? "On-screen FPS counter" : "Contador FPS en pantalla", &g_settings.fps_overlay);
             ImGui::Checkbox(T("Mostrar FPS en la barra de título"), &g_settings.show_fps);
             ImGui::SeparatorText(T("Velocidad"));

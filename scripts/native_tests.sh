@@ -42,3 +42,7 @@ $Z -O1 -ffunction-sections -fdata-sections -Wl,--gc-sections -Iruntime -Ithird_p
 build/test/test_texture_index.exe
 $Z -O1 -ffunction-sections -fdata-sections -Wl,--gc-sections -Iruntime -o build/test/test_romfs_cache.exe tests/native/test_romfs_cache.c $M/lib/libwinpthread.dll.a
 build/test/test_romfs_cache.exe build/test
+
+# [XCDE] T266: middle-button stick click as a pulse, dropped with ZL held.
+$Z -std=c11 -Wall -Wextra -Werror -o build/test/test_stick_click.exe tests/native/test_stick_click.c
+build/test/test_stick_click.exe

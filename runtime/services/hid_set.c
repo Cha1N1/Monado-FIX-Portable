@@ -68,14 +68,14 @@ SERVICE("set", set) {
     (void)s;
     switch (req->cmd) {
     case 0: OUT(uint64_t, 0) = lang_code(settings_language()); resp_size(resp, 8); break;  // GetLanguageCode
-    case 1: language_list(req, resp, 15); break;                                   // GetAvailableLanguageCodes
+    case 1: language_list(req, resp, NLANG); break;                                   // GetAvailableLanguageCodes
     case 2: {                                                                      // MakeLanguageCode
         uint32_t i = IN(uint32_t, 0);
         OUT(uint64_t, 0) = i < NLANG ? lang_code(languages[i]) : 0;
         resp_size(resp, 8);
         break;
     }
-    case 3: OUT(int32_t, 0) = 15; resp_size(resp, 4); break;
+    case 3: OUT(int32_t, 0) = NLANG; resp_size(resp, 4); break;
     case 4: OUT(uint32_t, 0) = 1; resp_size(resp, 4); break;                       // GetRegionCode: USA
     case 5: language_list(req, resp, NLANG); break;
     case 6: OUT(int32_t, 0) = NLANG; resp_size(resp, 4); break;

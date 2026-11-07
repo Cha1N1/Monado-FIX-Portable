@@ -23,7 +23,7 @@ enum { CHAOS_LETTERS_OFF = 0, CHAOS_LETTERS_EXPLORED = 1, CHAOS_LETTERS_MAP = 2 
 // System language served to the game (runtime/services/am.c GetDesiredLanguage, services/hid_set.c GetLanguageCode):
 // the game picks its text language from it, as it would from the Switch's own system setting. LANG_AUTO follows the
 // host locale ($LC_ALL / $LC_MESSAGES / $LANG); the rest are the codes of the languages the game has text for.
-enum { LANG_AUTO = 0, N_LANGUAGES = 12 };
+enum { LANG_AUTO = 0, N_LANGUAGES = 14 };
 // Vulkan device policy: automatic chooses the best usable adapter; compatibility disables optional fast paths.
 enum { GPU_PROFILE_AUTO = 0, GPU_PROFILE_COMPATIBILITY = 1 };
 enum { GPU_GPL_AUTO = -1, GPU_GPL_OFF = 0, GPU_GPL_ON = 1 };
@@ -88,6 +88,7 @@ typedef struct {
     int gpu_profile;     // GPU_PROFILE_*; compatibility disables optional pipeline-library, host-import and frame-generation paths
     int gpu_gpl;         // GPU_GPL_*; explicit graphics-pipeline-library override, restart required
     bool gpu_memory_budget; // use VK_EXT_memory_budget when exposed; informational allocator support
+    bool taa_off;        // [XCDE] remove only the game's temporal AA (lib_nx.ini tmaa): xcde.ini taa = 0 (default 1: kept)
 } Settings;
 
 enum { N_TUNIC_COLOURS = 13, N_HEART_COLOURS = 9 };

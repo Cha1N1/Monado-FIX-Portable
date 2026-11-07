@@ -7,6 +7,7 @@
 //   party manager = the unique object of class vtable 0x7000b35210, + 0x20
 // Runs on the game's main thread from the pad read (runtime/hle/input.c fill_state), between the game's own updates.
 // XCDE_PARTY_SWITCH_AT=<frame>[,<frame>...]: switch to the next member at those presented frames (tests).
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -398,14 +399,25 @@ static void mouse_camera(uint64_t frame) {
     float dx, dy;
     if (!input_mouse_take(frame, &dx, &dy)) return;
     g_cam_direct_frame = frame;
-    if (dx == 0 && dy == 0) return;
-    float k = 0.0025f * g_mouse_sens / 50;
+    // [XCDE] T267: the yaw we wrote last frame must still be there. If the game changed it (twice running) it drives
+    // the yaw itself (camera reset): hand the mouse to the right stick for a while (input.c input_mouse_fallback).
+    static float last_yaw;
+    static uint64_t last_frame;
+    static int fights;
+    extern void input_mouse_fallback(void);
     volatile float *v = (volatile float *)(uintptr_t)(cam + 0x1f0);
+    if (last_frame && frame - last_frame <= 2) {
+        if (fabsf(v[0] - last_yaw) > 0.01f) { if (++fights >= 2) { fights = 0, last_frame = 0, input_mouse_fallback(); return; } }
+        else fights = 0;
+    } else fights = 0;
+    if (dx == 0 && dy == 0) { last_frame = 0; return; }
+    float k = 0.0025f * g_mouse_sens / 50;
     float yaw = v[0] - dx * k, pitch = v[2] + dy * k * (g_mouse_invert ? -1 : 1);
     if (pitch < -0.98f) pitch = -0.98f;
     if (pitch > 1.18f) pitch = 1.18f;
     v[0] = v[1] = yaw;
     v[2] = v[3] = pitch;
+    last_yaw = yaw, last_frame = frame;
 }
 
 // [XCDE] T249: thresholds use the measured guest update cadence, including fractional FPS.

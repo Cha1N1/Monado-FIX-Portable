@@ -28,6 +28,29 @@ class Patch:
         return self.emit(gen, addr)
 
 
+class JumpTable:
+    """A verified byte-offset switch whose cases may cross lifted function boundaries."""
+
+    def __init__(self, build_id, instruction, table_offset, case_base, targets, req):
+        self.build_id = build_id
+        self.instruction = instruction
+        self.table_offset = table_offset
+        self.case_base = case_base
+        self.targets = tuple(targets)
+        self.req = req
+
+    def resolve(self, module, addr):
+        lo, size = module.nso.rodata
+        end = self.table_offset + len(self.targets)
+        valid = (module.nso.build_id == self.build_id and module.word(addr) == self.instruction
+                 and lo <= self.table_offset < end <= lo + size)
+        if valid:
+            targets = tuple(self.case_base + 4 * value for value in module.nso.image[self.table_offset:end])
+            if targets == self.targets and all(module.in_text(target) for target in targets):
+                return sorted(set(targets))
+        raise PatchMismatch(f'jump table at {addr:#x} does not match the verified XCDE build (req {self.req})')
+
+
 def load_patches(path):
     """Load PATCHES = {addr: Patch} from a python file; a missing file means no patches."""
     if not path or not os.path.exists(path):
@@ -39,6 +62,6 @@ def load_patches(path):
     for a, p in patches.items():
         if a % 4:
             raise ValueError(f'patch address {a:#x} is not 4-byte aligned')
-        if not isinstance(p, Patch):
-            raise ValueError(f'patch at {a:#x} is not a Patch')
+        if not isinstance(p, (Patch, JumpTable)):
+            raise ValueError(f'patch at {a:#x} is not a Patch or JumpTable')
     return patches

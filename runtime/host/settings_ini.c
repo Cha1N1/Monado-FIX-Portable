@@ -10,9 +10,10 @@
 #include "../quality_policy.h"
 #include "ini_writer.h"
 
-const char *const g_language_codes[N_LANGUAGES] = {"", "ja", "en-US", "fr", "de", "it", "es", "zh-CN", "ko", "nl", "pt", "ru"};
+const char *const g_language_codes[N_LANGUAGES] = {"", "ja", "en-US", "fr", "de", "it", "es", "zh-CN", "ko", "nl", "pt", "ru", "zh-Hans", "zh-Hant"};
 const char *const g_language_names[N_LANGUAGES] = {"Auto", "Japanese", "English", "French", "German", "Italian", "Spanish",
-                                                   "Chinese", "Korean", "Dutch", "Portuguese", "Russian"};
+                                                   "Chinese", "Korean", "Dutch", "Portuguese", "Russian",
+                                                   "Chinese (Simplified)", "Chinese (Traditional)"};
 Settings g_settings = {.fps = 30, .fps_overlay = true, .upscaler_auto = true, .volume = 1.0f, .movie_audio = true, .res_mode = RES_MATCH, .upscaler = UPSCALE_FSR1, .upscale_quality = UQ_QUALITY, .game_blur = true, .vsync = true, .ui_lang = 1, .gpu_index = -1, .gpu_profile = GPU_PROFILE_AUTO, .gpu_gpl = GPU_GPL_AUTO, .gpu_memory_budget = true};
 int g_window_w = 1280, g_window_h = 720;  // windowed size (settings.h)
 
@@ -66,6 +67,7 @@ void settings_load(void) {
         *eq = 0;
         char *k = trim(s), *v = trim(eq + 1);
         if (!strcmp(k, "fullscreen")) g_settings.fullscreen = atoi(v) != 0;
+        else if (!strcmp(k, "aspect")) g_settings.aspect = !strcmp(v, "original") ? ASPECT_ORIGINAL : ASPECT_UNLOCKED;
         else if (!strcmp(k, "window")) sscanf(v, "%dx%d", &g_window_w, &g_window_h);
         else if (!strcmp(k, "resolution")) {  // match | 1x..4x | 75% | 50% | 25% | dynamic
             if (!strcmp(v, "match")) g_settings.res_mode = RES_MATCH;
@@ -99,6 +101,7 @@ void settings_load(void) {
         else if (!strcmp(k, "antialias")) g_settings.antialias = !strcmp(v, "smaa") ? AA_SMAA : AA_OFF;
         else if (!strcmp(k, "depth_of_field")) g_settings.dof_off = atoi(v) == 0;
         else if (!strcmp(k, "game_blur")) g_settings.game_blur = atoi(v) != 0;
+        else if (!strcmp(k, "taa")) g_settings.taa_off = atoi(v) == 0;  // [XCDE] taa = 0 removes the game's temporal AA only
         else if (!strcmp(k, "vsync")) g_settings.vsync = atoi(v) != 0;
         else if (!strcmp(k, "launcher_lang")) g_settings.ui_lang = !strcmp(v, "es") ? 0 : 1;
         else if (!strcmp(k, "stick_deadzone")) { int d = atoi(v); g_settings.stick_deadzone = d < 0 ? 0 : d > 30 ? 30 : d; }
@@ -107,8 +110,8 @@ void settings_load(void) {
         else if (!strcmp(k, "movie_audio")) g_settings.movie_audio = atoi(v) != 0;
         else if (!strcmp(k, "show_fps")) g_settings.show_fps = atoi(v) != 0;
         else if (!strcmp(k, "fps")) {
-            static const char *names[] = {"30", "60", "120", "144", "165", "unlimited", "0"};
-            static const int rates[] = {30, 60, 120, 144, 165, 0, 0};
+            static const char *names[] = {"30", "60", "120", "144", "165", "unlimited", "0", "unl\xc3\xadmited", "ilimitado"};
+            static const int rates[] = {30, 60, 120, 144, 165, 0, 0, 0, 0};
             g_settings.fps = 30;
             for (unsigned i = 0; i < sizeof rates / sizeof rates[0]; ++i)
                 if (!strcmp(v, names[i])) { g_settings.fps = rates[i]; break; }
@@ -138,6 +141,7 @@ void settings_save(void) {
     static const char *res[] = {"match", "1", "2", "3", "4", "5", "6", "7", "8", "dynamic", "75%", "25%", "50%"};
     fprintf(f, "# Monado settings (the launcher writes this file)\n");
     fprintf(f, "fullscreen = %d\nwindow = %dx%d\n", g_settings.fullscreen, g_window_w, g_window_h);
+    fprintf(f, "aspect = %s\n", g_settings.aspect == ASPECT_ORIGINAL ? "original" : "auto");
     fprintf(f, "resolution = %s\n", g_settings.res_mode >= 0 && g_settings.res_mode <= 12 ? res[g_settings.res_mode] : "match");
     static const char *up[] = {"bilinear", "bilinear", "fsr", "fsr3", "dlss"};
     static const char *uq[] = {"native", "quality", "balanced", "performance", "ultra"};
@@ -147,6 +151,7 @@ void settings_save(void) {
             uq[g_settings.upscale_quality >= 0 && g_settings.upscale_quality <= 4 ? g_settings.upscale_quality : 1], g_settings.frame_gen);
     fprintf(f, "depth_of_field = %d\n", !g_settings.dof_off);
     fprintf(f, "game_blur = %d\n", g_settings.game_blur);
+    fprintf(f, "taa = %d\n", !g_settings.taa_off);
     fprintf(f, "vsync = %d\n", g_settings.vsync);
     fprintf(f, "stick_deadzone = %d\n", g_settings.stick_deadzone);
     fprintf(f, "launcher_lang = %s\n", g_settings.ui_lang ? "en" : "es");  // (the launcher's key: kept when the game saves)

@@ -93,6 +93,7 @@ struct Cfg {
     int gpu_profile = 0, gpu_gpl = -1;
     bool gpu_memory_budget = true, gpu_performance = false, gpu_keep_heavy = false;
     bool fullscreen = false;
+    int aspect = ASPECT_UNLOCKED;
     int win = 0;            // index into k_wins
     int res = 0;            // index into k_res
     int upscaler = 1;       // 0 bilinear, 1 FSR 1, 2 FSR 3.1, 3 DLSS
@@ -101,6 +102,7 @@ struct Cfg {
     bool smaa = false;
     bool dof = true;        // the game's depth of field (T183)
     bool game_blur = true;  // the game's own AA / temporal AA / motion blur (lib_nx.ini)
+    bool taa = true;        // the game's temporal AA alone (lib_nx.ini tmaa; false removes only it)
     bool vsync = true;      // FIFO presentation at 30 / 60 fps
     int cutscenes = 0;      // T224: 0 at the FPS setting, 1 at 30 (xcde.ini cutscenes = same | 30)
     bool cut_fg = false;    // T224: cutscenes at 30 + frame generation, gameplay without it (xcde.ini cutscenes = 30fg)
@@ -143,9 +145,9 @@ static const char *const k_wins[] = {"1280x720", "1600x900", "1920x1080", "2560x
 static const char *const k_res_ini[] = {"match", "1", "2", "3", "75%", "50%", "dynamic"};
 static const char *const k_res_ui[] = {"Igual que la ventana (recomendado)", "1x - 720p (como Switch)", "2x - 1440p",
                                        "3x - 2160p (4K)", "75% de la ventana", "50% de la ventana", "Dinámica (según rendimiento)"};
-static const char *const k_fps_ini[] = {"30", "60", "120", "144", "165", "unlímited"};
-static const char *const k_lang_ini[] = {"auto", "en-US", "es", "fr", "de", "it", "ja"};
-static const char *const k_lang_ui[] = {"Inglés (por defecto)", "Inglés", "Español", "Francés", "Alemán", "Italiano", "Japonés"};
+static const char *const k_fps_ini[] = {"30", "60", "120", "144", "165", "unlimited"};
+static const char *const k_lang_ini[] = {"auto", "en-US", "es", "fr", "de", "it", "ja", "ko", "zh-Hans", "zh-Hant"};
+static const char *const k_lang_ui[] = {"Inglés (por defecto)", "Inglés", "Español", "Francés", "Alemán", "Italiano", "Japonés", "Coreano", "Chino simplificado", "Chino tradicional"};
 
 static Cfg g;
 
@@ -174,7 +176,8 @@ static const char *const k_en[][2] = {
     {"75% de la ventana", "75% of the window"}, {"50% de la ventana", "50% of the window"},
     {"Dinámica (según rendimiento)", "Dynamic (by performance)"},
     {"Inglés (por defecto)", "English (default)"}, {"Inglés", "English"}, {"Español", "Spanish"}, {"Francés", "French"},
-    {"Alemán", "German"}, {"Italiano", "Italian"}, {"Japonés", "Japanese"},
+    {"Alemán", "German"}, {"Italiano", "Italian"}, {"Japonés", "Japanese"}, {"Coreano", "Korean"},
+    {"Chino simplificado", "Chinese (Simplified)"}, {"Chino tradicional", "Chinese (Traditional)"},
     {"Pantalla", "Display"}, {"Pantalla completa", "Fullscreen"}, {"Tamaño de la ventana", "Window size"},
     {"Resolución y escalado", "Resolution and scaling"}, {"Resolución interna", "Internal resolution"},
     {"El juego original renderiza a 720p. Más resolución = imagen más nítida y más carga para la GPU.",
@@ -221,6 +224,9 @@ static const char *const k_en[][2] = {
      "The near / far blur the game also applies on Switch.\n"
      "Off: the whole scene sharp (and a bit less GPU work)."},
     {"Antialiasing y desenfoque de movimiento del juego", "The game's anti-aliasing and motion blur"},
+    {"Antialiasing temporal (TAA) del juego", "The game's temporal anti-aliasing (TAA)"},
+    {"Solo el TAA, sin tocar el desenfoque de movimiento ni el del pelo.\nDesactivado: quita el emborronado del TAA (combínalo con SMAA para los bordes).",
+     "Only the TAA, leaving motion blur and hair blur alone.\nOff: removes the TAA smearing (combine with SMAA for the edges)."},
     {"El antialiasing temporal (TMAA), el desenfoque de movimiento y el del pelo que el juego\n"
      "aplica para los 720p de la Switch: a 1080p o más suavizan toda la imagen.\n"
      "Desactivado: imagen nítida (combínalo con SMAA para los bordes).",
@@ -239,7 +245,7 @@ static const char *const k_en[][2] = {
     {"Cada imagen se muestra exactamente una vez, sincronizada con la pantalla: movimiento\n"
      "fluido (sin imágenes repetidas o saltadas). Con más de 60 FPS o sin límite no se aplica.",
      "Each image is shown exactly once, in sync with the display: smooth motion\n"
-     "(no repeated or skipped images). Not applied above 60 FPS or unlímited."},
+     "(no repeated or skipped images). Not applied above 60 FPS or unlimited."},
     {"Como el resto del juego", "Like the rest of the game"}, {"30 estables (como en Switch)", "Steady 30 (like Switch)"},
     {"Cinemáticas", "Cutscenes"},
     {"En las cinemáticas el juego anima a los personajes a 30 aunque juegues a más FPS: con la\n"
@@ -376,6 +382,7 @@ static void load() {
         for (char *e = v + strlen(v); e > v && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r' || e[-1] == '\n'); ) *--e = 0;
         int i;
         if (!strcmp(k, "fullscreen")) g.fullscreen = atoi(v) != 0;
+        else if (!strcmp(k, "aspect")) g.aspect = !strcmp(v, "original") ? ASPECT_ORIGINAL : ASPECT_UNLOCKED;
         else if (!strcmp(k, "window") && (i = find(k_wins, 5, v)) >= 0) g.win = i;
         else if (!strcmp(k, "resolution") && (i = find(k_res_ini, 7, v)) >= 0) g.res = i;
         else if (!strcmp(k, "upscaler")) { g.upscaler_auto = !strcmp(v, "auto"); g.upscaler = !strcmp(v, "fsr") || g.upscaler_auto ? 1 : !strcmp(v, "fsr3") ? 2 : !strcmp(v, "dlss") ? 3 : 0; }
@@ -384,6 +391,7 @@ static void load() {
         else if (!strcmp(k, "antialias")) g.smaa = !strcmp(v, "smaa");
         else if (!strcmp(k, "depth_of_field")) g.dof = atoi(v) != 0;
         else if (!strcmp(k, "game_blur")) g.game_blur = atoi(v) != 0;
+        else if (!strcmp(k, "taa")) g.taa = atoi(v) != 0;
         else if (!strcmp(k, "vsync")) g.vsync = atoi(v) != 0;
         else if (!strcmp(k, "cutscenes")) { g.cutscenes = !strcmp(v, "30") || !strcmp(v, "30fg") ? 1 : 0; g.cut_fg = !strcmp(v, "30fg"); }
         else if (!strcmp(k, "party_switch")) g.party_switch = atoi(v) != 0;
@@ -401,10 +409,10 @@ static void load() {
         else if (!strcmp(k, "dynamic_max_height")) g.dynamic_max_height=std::clamp(atoi(v),0,4320);
         else if (!strcmp(k, "effects_off")) g.effects_off=(unsigned)strtoul(v,nullptr,10)&31u;
         else if (!strcmp(k, "gpu_keep_heavy")) g.gpu_keep_heavy = atoi(v) != 0;
-        else if (!strcmp(k, "fps")) { g.fps = 0; for (int j = 0; j < 6; j++) if (!strcmp(v, k_fps_ini[j])) g.fps = j; }
+        else if (!strcmp(k, "fps")) { g.fps = 0; for (int j = 0; j < 6; j++) if (!strcmp(v, k_fps_ini[j])) g.fps = j; if (!strcmp(v, "unlímited") || !strcmp(v, "0")) g.fps = 5; }
         else if (!strcmp(k, "volume")) g.volume = atoi(v);
         else if (!strcmp(k, "movie_audio")) g.movie_audio = atoi(v) != 0;
-        else if (!strcmp(k, "language") && (i = find(k_lang_ini, 7, v)) >= 0) g.lang = i;
+        else if (!strcmp(k, "language") && (i = find(k_lang_ini, 10, v)) >= 0) g.lang = i;
         else if (!strncmp(k, "mod_", 4)) g_mods.push_back(Mod{k + 4, atoi(v) != 0, false});
         else if (!strncmp(k, "bind_pad_", 9) && (i = find(k_ini, NPAD, k + 9)) >= 0) {
             int h = find(k_pad_ini, PADB_COUNT, v);
@@ -437,10 +445,12 @@ static bool save() {
     fprintf(f,"low_memory = %d\ndynamic_min_height = %d\ndynamic_max_height = %d\neffects_off = %u\n",g.gpu_performance,g.dynamic_min_height,g.dynamic_max_height,g.effects_off);
     fprintf(f, "fullscreen = %d\nwindow = %s\nresolution = %s\nupscaler = %s\nantialias = %s\nshow_fps = %d\n", g.fullscreen,
             k_wins[g.win], k_res_ini[g.res], g.upscaler_auto ? "auto" : k_ups_ini[g.upscaler], g.smaa ? "smaa" : "off", g.show_fps);
+    fprintf(f, "aspect = %s\n", g.aspect == ASPECT_ORIGINAL ? "original" : "auto");
     fprintf(f, "vulkan_api = %s\nfps_overlay = %d\n", g.vulkan_api == 12 ? "1.2" : g.vulkan_api == 13 ? "1.3" : g.vulkan_api == 14 ? "1.4" : "auto", g.fps_overlay);
     fprintf(f, "upscale_quality = %s\nframe_gen = %d\n", k_uq_ini[g.uquality], g.frame_gen);
     fprintf(f, "depth_of_field = %d\n", g.dof);
     fprintf(f, "game_blur = %d\n", g.game_blur);
+    fprintf(f, "taa = %d\n", g.taa);
     fprintf(f, "vsync = %d\n", g.vsync);
     fprintf(f, "cutscenes = %s\n", g.cut_fg ? "30fg" : g.cutscenes ? "30" : "same");
     fprintf(f, "party_switch = %d\n", g.party_switch);
@@ -781,6 +791,8 @@ static void tab_graphics() {
     }
     ImGui::SeparatorText(T("Pantalla"));
     ImGui::Checkbox(T("Pantalla completa"), &g.fullscreen);
+    const char *aspects[] = {g.ui_lang ? "Automatic" : "Automático", g.ui_lang ? "Original 16:9" : "16:9 original"};
+    monado_combo(g.ui_lang ? "Aspect ratio" : "Relación de aspecto", &g.aspect, aspects, 2);
     ImGui::SetNextItemWidth(260 * g_scale);
     monado_combo(T("Tamaño de la ventana"), &g.win, k_wins, 5);
     ImGui::SeparatorText(T("Resolución y escalado"));
@@ -839,6 +851,8 @@ static void tab_graphics() {
     ImGui::SetItemTooltip(T("El antialiasing temporal (TMAA), el desenfoque de movimiento y el del pelo que el juego\n"
                           "aplica para los 720p de la Switch: a 1080p o más suavizan toda la imagen.\n"
                           "Desactivado: imagen nítida (combínalo con SMAA para los bordes)."));
+    ImGui::Checkbox(T("Antialiasing temporal (TAA) del juego"), &g.taa);
+    ImGui::SetItemTooltip(T("Solo el TAA, sin tocar el desenfoque de movimiento ni el del pelo.\nDesactivado: quita el emborronado del TAA (combínalo con SMAA para los bordes)."));
     ImGui::Checkbox(g.ui_lang ? "On-screen FPS counter" : "Contador FPS en pantalla", &g.fps_overlay);
     ImGui::Checkbox(T("Mostrar FPS en la barra de título"), &g.show_fps);
     ImGui::SeparatorText(T("Velocidad"));
@@ -1059,7 +1073,7 @@ static void tab_audio() {
     ImGui::Checkbox(T("Sonido de los vídeos"), &g.movie_audio);
     ImGui::SeparatorText(T("Idioma del juego"));
     ImGui::SetNextItemWidth(260 * g_scale);
-    monado_combo(T("Idioma"), &g.lang, TL(k_lang_ui, 7).p, 7);
+    monado_combo(T("Idioma"), &g.lang, TL(k_lang_ui, 10).p, 10);
     ImGui::TextDisabled(T("Textos del juego. Solo los idiomas que incluya tu copia; si uno falla, vuelve a Inglés."));
 }
 

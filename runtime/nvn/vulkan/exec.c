@@ -14,6 +14,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 
@@ -1068,6 +1069,91 @@ static uint64_t pb_frame, pb_used_ns;
 // in some areas). On AMD integrated GPUs (Ryzen Vega, Beelink EQR5) they cost ~1.2-1.4 us per pixel and dropped the game
 // from 30 fps to 5 fps or even 0.4 fps (GPU profiles). Skipping them restored 30 fps and the missing effects were not
 // noticeable. Off for everything that is not an AMD integrated GPU. XCDE_AMD_KEEP_HEAVY=1 draws them anyway.
+// [FIX-TEX] Una textura nula, vacia o de un tipo que el shader no puede leer se sustituye por una textura "dummy". Antes solo se
+// avisaba con XCDE_GLITCH_WATCH=1; ahora cada combinacion distinta (shader + ranura) queda en last_game.log una vez, para
+// saber que shader dibuja con texturas sustitutas. Cuesta una busqueda en una tabla de 128 entradas, solo en ese caso raro.
+static void dummy_report(const char *why, int stage, int slot, uint32_t tic, int shader_type, uint64_t fs, uint32_t target, uint32_t fmt, uint32_t w, uint32_t h) {
+    static uint64_t seen[128];
+    static int n;
+    uint64_t key = (fs * 0x9E3779B97F4A7C15ull) ^ ((uint64_t)(stage + 1) << 56) ^ ((uint64_t)(slot + 1) << 48) ^ ((uint64_t)tic << 8) ^ (uint64_t)shader_type;
+    if (!key) key = 1;
+    for (int i = 0; i < n; i++) if (seen[i] == key) return;
+    if (n >= 128) return;
+    seen[n++] = key;
+    LOG("[tex-fix] %s: stage %d unit %d pool slot %u, shader type %d, texture target %u fmt %#x %ux%u, fs %llx%c", why, stage, slot, tic, shader_type,
+        target, fmt, w, h, (unsigned long long)fs, 10);
+}
+// [HUNT] "modo caceria" (XCDE_HUNT=1, o si existe skip_fs.txt junto al .exe): sirve para encontrar el fragment shader que pinta
+// algo mal (p. ej. los toldos azules) y dejarlo saltado para siempre.
+//   F6 / F7: shader anterior / siguiente (Shift: de 10 en 10) - se SALTA ese shader, mira si desaparece lo azul
+//   F8: lo encontre -> guarda el hash en skip_fs.txt (se salta siempre, tambien sin XCDE_HUNT)
+//   F5: dejar de saltar
+// Los shaders son los distintos fragment shaders dibujados en el frame anterior, ordenados por hash.
+volatile int g_hunt_step, g_hunt_save, g_hunt_reset;
+static uint64_t g_skipfs[64];
+static int g_nskipfs = -1;
+static uint64_t hunt_cur[512], hunt_prev[512];
+static int hunt_ncur, hunt_nprev, hunt_idx = -1;
+static uint64_t hunt_frame = ~0ull, hunt_target, hunt_last;
+static int hunt_on(void) {
+    static int v = -1;
+    if (v < 0) {
+        v = getenv("XCDE_HUNT") != NULL;
+        FILE *f = fopen("skip_fs.txt", "r");
+        if (f) { v = 1; fclose(f); }
+    }
+    return v;
+}
+static void hunt_load_file(void) {
+    FILE *f = fopen("skip_fs.txt", "r");
+    if (!f) return;
+    char ln[128];
+    while (fgets(ln, sizeof ln, f) && g_nskipfs < 64) {
+        uint64_t h = strtoull(ln, NULL, 16);
+        if (h) { g_skipfs[g_nskipfs++] = h; LOG("[hunt] skip_fs.txt: fragment shader %016llx se salta siempre%c", (unsigned long long)h, 10); }
+    }
+    fclose(f);
+}
+static int hunt_cmp(const void *a, const void *b) {
+    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    return x < y ? -1 : x > y;
+}
+static bool hunt_draw(uint64_t h) {
+    uint64_t f = renderer_present_count();
+    if (f != hunt_frame) {  // new frame: last frame's distinct shaders become the list to step through
+        hunt_frame = f;
+        memcpy(hunt_prev, hunt_cur, (size_t)hunt_ncur * sizeof hunt_cur[0]);
+        hunt_nprev = hunt_ncur; hunt_ncur = 0; hunt_last = 0;
+        qsort(hunt_prev, (size_t)hunt_nprev, sizeof hunt_prev[0], hunt_cmp);
+        if (g_hunt_reset) { g_hunt_reset = 0; hunt_idx = -1; hunt_target = 0; LOG("[hunt] saltos desactivados%c", 10); }
+        if (g_hunt_step && hunt_nprev) {
+            int st = g_hunt_step; g_hunt_step = 0;
+            hunt_idx = hunt_idx < 0 ? (st > 0 ? st - 1 : hunt_nprev + st) : hunt_idx + st;
+            if (hunt_idx < 0) hunt_idx = 0;
+            if (hunt_idx >= hunt_nprev) hunt_idx = hunt_nprev - 1;
+            hunt_target = hunt_prev[hunt_idx];
+            LOG("[hunt] %d/%d: se salta el fragment shader %016llx%c", hunt_idx + 1, hunt_nprev, (unsigned long long)hunt_target, 10);
+        }
+        if (g_hunt_save) {
+            g_hunt_save = 0;
+            if (hunt_target && g_nskipfs < 64) {
+                FILE *o = fopen("skip_fs.txt", "a");
+                if (o) { fprintf(o, "%016llx\n", (unsigned long long)hunt_target); fclose(o); }
+                g_skipfs[g_nskipfs++] = hunt_target;
+                LOG("[hunt] GUARDADO en skip_fs.txt: fragment shader %016llx%c", (unsigned long long)hunt_target, 10);
+                hunt_target = 0; hunt_idx = -1;
+            }
+        }
+    }
+    if (h && h != hunt_last) {
+        hunt_last = h;
+        int i = 0;
+        while (i < hunt_ncur && hunt_cur[i] != h) i++;
+        if (i == hunt_ncur && hunt_ncur < 512) hunt_cur[hunt_ncur++] = h;
+    }
+    return hunt_target && h == hunt_target;
+}
+
 static int amd_igpu_heavy_skip(void) {
     static int v = -1;
     if (v < 0) {
@@ -1953,6 +2039,7 @@ static VkPipelineLayout make_layout(Prog *p, int nsets, VkShaderStageFlags s0, V
     return l;
 }
 
+static uint64_t hmix(uint64_t h, const void *p, size_t n);
 static void save_glsl(const char *src, uint64_t addr, const char *suffix) {
     if (!getenv("LARECOMP_SAVE_MSL")) return;
     mkdir("build/glsl", 0755);
@@ -2068,6 +2155,25 @@ static void translate_program(void *arg) {
     p->vs_uses_vid = strstr(p->vi->msl, "gl_VertexIndex") != NULL;
     save_glsl(p->vi->msl, p->code[0], "vs");
     save_glsl(p->fi->msl, p->code[1], "fs");
+    {   // [FIX-TEX] XCDE_DUMP_FS_HASH=<hash>: writes the translated GLSL of the fragment shader with that hash (and the vertex shader
+        // of the same program) to build/glsl/<hash>_fs.glsl / _vs.glsl. The hash is the one the [hunt] log lines / skip_fs.txt show.
+        const char *dh = getenv("XCDE_DUMP_FS_HASH");
+        if (dh && *dh && p->code[1]) {
+            uint64_t want = strtoull(dh, NULL, 16), got = hmix(1469598103934665603ull, (const void *)(uintptr_t)(p->code[1] + 0x30), 0x200);
+            if (want && got == want) {
+                mkdir("build/glsl", 0755);
+                const char *srcs[2] = {p->fi->msl, p->vi->msl}, *suf[2] = {"fs", "vs"};
+                for (int k = 0; k < 2; k++) {
+                    char path[256];
+                    snprintf(path, sizeof path, "build/glsl/%016llx_%s.glsl", (unsigned long long)got, suf[k]);
+                    FILE *f = fopen(path, "w");
+                    if (f) { fputs(srcs[k], f); fclose(f); }
+                }
+                LOG("[tex-fix] dumped GLSL of fragment shader %016llx (vs %llx fs %llx) to build/glsl/%c", (unsigned long long)got,
+                    (unsigned long long)p->code[0], (unsigned long long)p->code[1], 10);
+            }
+        }
+    }
     if (p->gi) save_glsl(p->gi->msl, p->gcode, "gs");
     run_job(compile_program, p);
 }
@@ -2295,7 +2401,11 @@ static VkFormat vertex_format(uint32_t f) {
     case 0x3F: return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
     case 0x40: return VK_FORMAT_E5B9G9R9_UFLOAT_PACK32;
     case 0x51: return VK_FORMAT_R8_UINT;
-    default: return VK_FORMAT_R32G32B32A32_SFLOAT;
+    default: {  // [FIX-TEX] unknown NVN vertex format: read as 4 floats (garbage colours); say so once per format
+        static uint8_t seen_f[256];
+        if (f < 256 && !seen_f[f]++) LOG("[tex-fix] unknown NVN vertex format %#x: read as R32G32B32A32_SFLOAT%c", f, 10);
+        return VK_FORMAT_R32G32B32A32_SFLOAT;
+    }
     }
 }
 
@@ -3096,6 +3206,40 @@ static void pw_log_key(const PipeKey *k, int n) {
     LOG("%s%c", b, 10);
 }
 
+// [FIX-TEX] XCDE_DUMP_FS_HASH=<hash>: every new pipeline drawn with that fragment shader logs its vertex layout (streams, formats, offsets)
+static void attr_layout_log(const PipeKey *k, uint64_t fsh) {
+    static int n;
+    if (n++ >= 24) return;
+    char b[1500]; int o = 0;
+    o += snprintf(b + o, sizeof b - o, "[tex-fix] pipeline of fragment shader %016llx: vs %llx fs %llx | ncolor %u | attrs %x streams %x |", (unsigned long long)fsh,
+                  (unsigned long long)k->prog->code[0], (unsigned long long)k->prog->code[1], k->ncolor, k->attr_mask, k->used_streams);
+    for (int s = 0; s < 17; s++) if (k->used_streams & (1u << s)) o += snprintf(b + o, sizeof b - o, " s%d(stride %u div %u)", s, k->stride[s], k->divisor[s]);
+    o += snprintf(b + o, sizeof b - o, " | VkFormat@offset/stream:");
+    for (int i = 0; i < 32; i++) if (k->attr_mask & (1u << i)) o += snprintf(b + o, sizeof b - o, " a%d:%u@%u/b%u", i, k->attr_fmt[i], k->attr_off[i], k->attr_bind[i]);
+    LOG("%s%c", b, 10);
+}
+static int g_mat_blue;  // [FIX-TEX] the last cb4 of the watched fragment shader had colour (0,0,1,1)
+// [FIX-TEX] XCDE_BLUE_FIX=1 (or "r,g,b", 0..1): the toldo/tent material shader 69dc9c67ee198e5d draws untextured surfaces with colour = vertex colour
+// x cb4[2]. Thousands of its draws read a placeholder material cb4 = (0.2,0.5,0.5,1 | 0,0,0,0 | 0,0,1,1) whose colour is pure blue; this
+// replaces that cb4[2] by a neutral colour (default 0.9,0.8,0.65) in the constant-buffer copy. Other materials of the shader are untouched.
+static const float *blue_fix_color(void) {
+    static int init; static float c[3]; static int on;
+    if (!init) {
+        init = 1;
+        const char *e = getenv("XCDE_BLUE_FIX");
+        if (e && *e && strcmp(e, "0")) {
+            c[0] = 0.9f; c[1] = 0.8f; c[2] = 0.65f;
+            if (strchr(e, ',')) sscanf(e, "%f,%f,%f", &c[0], &c[1], &c[2]);
+            on = 1;
+        }
+    }
+    return on ? c : NULL;
+}
+static uint64_t dump_fs_want(void) {
+    static int init; static uint64_t w;
+    if (!init) { init = 1; const char *e = getenv("XCDE_DUMP_FS_HASH"); w = e && *e ? strtoull(e, NULL, 16) : 0; }
+    return w;
+}
 static VkResult pipeline_whole(const PipeKey *k, VkPipelineCreateFlags flags, VkPipeline *out) {
     VkPipelineShaderStageCreateInfo stages[3] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = k->prog->vs, .pName = "main"},
@@ -4082,6 +4226,22 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
         LOG("[cbfull] k %d size %llu (pass %d)\n", k, (unsigned long long)size, debug_pass_no);
         for (uint64_t q = 0; q < (r.size < size ? r.size : size) / 16 && q < 64; q++) LOG("[cbfull]  %2llu: %10.5g %10.5g %10.5g %10.5g\n", (unsigned long long)q, f[q*4], f[q*4+1], f[q*4+2], f[q*4+3]);
     }
+    if (stage == 1 && k == 4 && dump_fs_want() && dump_fs_want() == g_cur_fs_hash) {  // [FIX-TEX] the material constants (cb4) of the draws with that fragment shader
+        static unsigned cn, shown;
+        if ((cn++ < 6 || cn % 200 == 0) && shown < 100) {
+            shown++;
+            const float *f = (const float *)(uintptr_t)r.addr;
+            unsigned nf = (unsigned)((r.size ? (r.size < 64 ? r.size : 64) : 64) / 4);
+            LOG("[tex-fix] cb4 draw#%u addr %llx bound %llu used %llu, first %u floats:", cn, (unsigned long long)r.addr, (unsigned long long)r.size, (unsigned long long)size, nf);
+            for (unsigned q = 0; q < nf; q++) LOG(" %g", f[q]);
+            LOG("%c", 10);
+        }
+    }
+    if (stage == 1 && k == 4) g_mat_blue = 0;
+    if (stage == 1 && k == 4 && g_cur_fs_hash && (g_cur_fs_hash == dump_fs_want() || (blue_fix_color() && g_cur_fs_hash == 0x69dc9c67ee198e5dull))) {
+        const float *f = (const float *)(uintptr_t)r.addr;
+        g_mat_blue = (!r.size || r.size >= 48) && f[8] == 0.0f && f[9] == 0.0f && f[10] == 1.0f;
+    }
     if (size > r.size && r.size) {
         // [XCDE] T126: the shader may read past the range the game bound. Maxwell returns 0 there; a shorter Vulkan
         // range only promises "some value of the buffer" (robustBufferAccess): leftovers of the transient ring
@@ -4089,6 +4249,10 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
         VkSpan s = vk_transient(size, 256);
         memcpy(s.ptr, (const void *)(uintptr_t)r.addr, r.size);
         memset((uint8_t *)s.ptr + r.size, 0, size - r.size);
+        if (g_mat_blue && blue_fix_color() && r.size >= 48) {  // [FIX-TEX] placeholder blue -> neutral colour (see blue_fix_color)
+            float *pf = (float *)s.ptr;
+            pf[8] = blue_fix_color()[0]; pf[9] = blue_fix_color()[1]; pf[10] = blue_fix_color()[2];
+        }
         return ubo_span(s, size);
     }
     if (size < 16) size = 16;
@@ -4096,6 +4260,13 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
     // within a command list nothing writes guest memory (no inline UpdateUniformBuffer: that writes through below
     // and drops the shared copies).
     if (g_debug_frame && getenv("XCDE_TRACE_CB")) { const float *f = (const float *)(uintptr_t)r.addr; LOG("[cb] stage %d k %d addr %llx size %llu : %g %g %g %g\n", stage, k, (unsigned long long)r.addr, (unsigned long long)size, f[0], f[1], f[2], f[3]); }
+    if (g_mat_blue && blue_fix_color() && size >= 48) {  // [FIX-TEX] same as above for a range bound at its full size
+        VkSpan s2 = vk_transient(size, 256);
+        memcpy(s2.ptr, (const void *)(uintptr_t)r.addr, size);
+        float *pf = (float *)s2.ptr;
+        pf[8] = blue_fix_color()[0]; pf[9] = blue_fix_color()[1]; pf[10] = blue_fix_color()[2];
+        return ubo_span(s2, size);
+    }
     return ubo_span(guest_copy(r.addr, size), size);
 }
 
@@ -4836,6 +5007,7 @@ static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo
                             e->tex->format, e->tex->width, e->tex->height, e->tex->depth, (unsigned long long)audit_vs(), (unsigned long long)audit_fs(),
                             e->reg_frame, e->prev_target, 10);
                 }
+                if (vk_view_mismatch) dummy_report("tipo incompatible (textura dummy)", stage, slot, tic, st_->type, audit_fs(), e->tex->target, e->tex->format, e->tex->width, e->tex->height);
                 if (st_->shadow && e->tex->format == 0x32) {  // [XCDE] a depth compare on D16 (Maxwell rounds the reference first)
                     static int nd16;
                     if (nd16++ < 10) LOG("[vk] depth compare on a D16 texture %ux%u (fs %llx)\n", e->tex->width, e->tex->height,
@@ -4873,6 +5045,8 @@ static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo
                     stage, slot, tic, (unsigned long long)audit_vs(), (unsigned long long)audit_fs());
         }
     }
+    if (!view && h && st.tpool && tic < (uint32_t)st.tpool->count && !((NvnTexEntry *)st.tpool->entries)[tic].tex)
+        dummy_report("ranura vacia (textura dummy)", stage, slot, tic, st_->type, audit_fs(), 0, 0, 0, 0);
     if (!view) view = vk_dummy_view(st_->type);
     if (!smp) smp = vk_default_sampler(true);
     *out = (VkDescriptorImageInfo){smp, view, VK_IMAGE_LAYOUT_GENERAL};
@@ -5413,7 +5587,7 @@ static void draw_(CmdRec *r, bool indexed) {
     // item cursor, widescreen backdrop detection) ran here on every draw; XCDE has none of them. The fragment
     // program hash is computed only for the debug switches that use it.
     static int fsh = -1;
-    if (fsh < 0) fsh = getenv("LARECOMP_SKIP_FSHASH") || getenv("LARECOMP_LOG_FSHASH") || getenv("XCDE_WATCH_FS") || ct_on() || amd_igpu_heavy_skip();
+    if (fsh < 0) fsh = getenv("LARECOMP_SKIP_FSHASH") || getenv("LARECOMP_LOG_FSHASH") || getenv("XCDE_WATCH_FS") || ct_on() || amd_igpu_heavy_skip() || hunt_on() || getenv("XCDE_DUMP_FS_HASH") || getenv("XCDE_BLUE_FIX");
     if (fsh || g_settings.dof_off) {  // (depth of field: the F1 menu turns it off and on while playing)
         static uint64_t last_fs, last_hash;
         uint64_t fs = st.program->stages[1].code_addr;
@@ -5421,22 +5595,22 @@ static void draw_(CmdRec *r, bool indexed) {
             last_fs = fs;
             last_hash = fs ? hmix(1469598103934665603ull, (const void *)(uintptr_t)(fs + 0x30), 0x200) : 0;
         }
-        static uint64_t skip[16];
-        static int nskip = -1;
-        if (nskip < 0) {
-            nskip = 0;
-            for (const char *p = getenv("LARECOMP_SKIP_FSHASH"); p && *p && nskip < 16;) {
-                skip[nskip++] = strtoull(p, (char **)&p, 16);
+        if (g_nskipfs < 0) {
+            g_nskipfs = 0;
+            for (const char *p = getenv("LARECOMP_SKIP_FSHASH"); p && *p && g_nskipfs < 64;) {
+                g_skipfs[g_nskipfs++] = strtoull(p, (char **)&p, 16);
                 while (*p == ',') p++;
             }
             // [AMD-IGPU-FIX] heavy volume effect: see amd_igpu_heavy_skip()
             if (amd_igpu_heavy_skip()) {
                 static const uint64_t heavy[] = { 0x53329ef60c533b43ull, 0x36580ad1389195c3ull, 0x071492ad778cf10cull };
-                for (size_t h = 0; h < sizeof heavy / sizeof heavy[0] && nskip < 16; h++) skip[nskip++] = heavy[h];
+                for (size_t h = 0; h < sizeof heavy / sizeof heavy[0] && g_nskipfs < 64; h++) g_skipfs[g_nskipfs++] = heavy[h];
                 LOG("[vk] AMD integrated GPU: %d heavy volume-effect fragment shaders skipped (XCDE_AMD_KEEP_HEAVY=1 keeps them)%c", (int)(sizeof heavy / sizeof heavy[0]), 10);
             }
+            hunt_load_file();
         }
-        for (int i = 0; i < nskip; i++) if (last_hash == skip[i]) { SKIPPED(); return; }
+        for (int i = 0; i < g_nskipfs; i++) if (last_hash == g_skipfs[i]) { SKIPPED(); return; }
+        if (hunt_on() && hunt_draw(last_hash)) { SKIPPED(); return; }
         // [XCDE] T183: launcher "depth of field" off (xcde.ini depth_of_field = 0). The game's DOF is a bokeh chain after
         // the lighting: CoC + half-res colour (fs 69b277b005fbc48a), 64x36 tiles, one point sprite per tile splatted into
         // a 640x360 buffer (f818597443f5fa73), then the sprites composited over the scene (8cb02bca8ec7e152). Without
@@ -5640,6 +5814,7 @@ static void draw_(CmdRec *r, bool indexed) {
         atomic_fetch_add(&pp->jobs, 1);
         run_job(build_pipeline, pp);
         var_record(st.program, &vkey, &fkey, &k);  // [XCDE] T163
+        if (dump_fs_want() && dump_fs_want() == g_cur_fs_hash) attr_layout_log(&k, dump_fs_want());
     }
     else if (atomic_load(&pp->state) == 3) {  // [XCDE] evicted (pipe_evict): built again, from the warm caches
         pp->how &= 0x80;
@@ -5715,7 +5890,11 @@ static void draw_(CmdRec *r, bool indexed) {
     // ---- rasterizer
     uint8_t cull = st.poly[0];
     if (vkey.flip_x) cull = 0;  // (mirror mode's composite: one full-screen quad, either winding)
-    VkCullModeFlags cm = cull == 1 ? VK_CULL_MODE_FRONT_BIT : cull == 2 ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
+    // [FIX-TEX] NVN cull face 3 = FRONT_AND_BACK: every triangle is culled (the game draws its placeholder / hidden helper objects with it:
+    // the blue tents, shader 69dc9c67ee198e5d, cb4 = 0,0,1,1). It was mapped to NONE, so they were drawn. LARECOMP_CULL3_NONE=1 brings that back.
+    static int cull3_none = -1;
+    if (cull3_none < 0) cull3_none = getenv("LARECOMP_CULL3_NONE") != NULL;
+    VkCullModeFlags cm = cull == 1 ? VK_CULL_MODE_FRONT_BIT : cull == 2 ? VK_CULL_MODE_BACK_BIT : (cull == 3 && !cull3_none) ? VK_CULL_MODE_FRONT_AND_BACK : VK_CULL_MODE_NONE;
     if (ss_need(SS_CULL, ss.cull == cm)) { ss.cull = cm; vkCmdSetCullMode(cb, cm); }
     bool ccw = st.poly[1] == 1;
     static int flipw = -1;  // LARECOMP_VK_FLIP_WINDING: invert the front-face mapping (A/B against Metal)
@@ -6055,6 +6234,38 @@ static void draw_(CmdRec *r, bool indexed) {
             }
             LOG("\n");
             st.rt_dirty = true;
+        }
+    }
+    if (dump_fs_want() && dump_fs_want() == g_cur_fs_hash) {  // [FIX-TEX] the first bytes of every vertex stream of the first draws with that fragment shader
+        static unsigned nd;
+        unsigned qd = nd++;
+        {   // render state of the draws with the (0,0,1,1) material vs the rest: 8 of each class, then one in 400
+            static unsigned sc[2];
+            unsigned cn2 = sc[g_mat_blue ? 1 : 0]++;
+            if (cn2 < 8 || cn2 % 400 == 0) {
+                LOG("[tex-fix] state %s#%u: ncolor %u", g_mat_blue ? "BLUE" : "other", cn2, k.ncolor);
+                for (uint32_t i = 0; i < k.ncolor && i < 8; i++) LOG(" rt%u(fmt %d mask %x blend %d)", i, (int)k.color[i], k.write_mask[i], (k.blend_on >> i) & 1);
+                LOG(" | depth fmt %d stencil fmt %d | ds test %u write %u fn %u stencil %u ref %u | cull %u front %u fill %d | a2c %d samples %u logic %d | vp %g %g %g %g%c",
+                    (int)k.depth, (int)k.stencil, st.ds[0], st.ds[1], st.ds[2], st.ds[3], (unsigned)st.stencil_ref[0], st.poly[0], st.poly[1], k.poly_fill, k.a2c, k.samples,
+                    k.logic_op, st.viewport[0][0], st.viewport[0][1], st.viewport[0][2], st.viewport[0][3], 10);
+            }
+        }
+        if (qd < 6 || (qd % 200 == 0 && qd < 20000)) {
+            LOG("[tex-fix] draw#%u layout:", qd);
+            for (int a = 0; a < 32; a++) if (k.attr_mask & (1u << a)) LOG(" a%d:%u@%u/b%u", a, k.attr_fmt[a], k.attr_off[a], k.attr_bind[a]);
+            for (int s2 = 0; s2 < 17; s2++) if (k.used_streams & (1u << s2)) LOG(" s%d(stride %u div %u)", s2, k.stride[s2], k.divisor[s2]);
+            LOG("%c", 10);
+            LOG("[tex-fix] vertex data, fs %016llx, vs %llx, count %u:", (unsigned long long)g_cur_fs_hash, (unsigned long long)st.program->stages[0].code_addr, (unsigned)count);
+            for (int s = 0; s < 17; s++) {
+                if (!(k.used_streams & (1u << s)) || s == ZERO_BINDING || !dbg_vb_addr[s]) continue;
+                uint64_t n = (uint64_t)k.stride[s] * 3;
+                if (n > 192) n = 192;
+                if (dbg_vb_len[s] && n > dbg_vb_len[s]) n = dbg_vb_len[s];
+                const uint8_t *m = (const uint8_t *)(uintptr_t)dbg_vb_addr[s];
+                LOG(" s%d(stride %u):", s, k.stride[s]);
+                for (uint64_t i = 0; i < n; i++) LOG("%s%02x", i && i % k.stride[s] == 0 ? " | " : (i ? " " : " "), m[i]);
+            }
+            LOG("%c", 10);
         }
     }
     if (g_debug_frame && xfb && getenv("XCDE_DUMP_XFB")) {  // [XCDE] debugging: what the capture holds once this draw ran

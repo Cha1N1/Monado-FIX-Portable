@@ -2,9 +2,10 @@
 #include "../settings.h"
 
 int g_window_w = 1280, g_window_h = 720;
-const char *const g_language_codes[N_LANGUAGES] = {"", "ja", "en-US", "fr", "de", "it", "es", "zh-CN", "ko", "nl", "pt", "ru"};
+const char *const g_language_codes[N_LANGUAGES] = {"", "ja", "en-US", "fr", "de", "it", "es", "zh-CN", "ko", "nl", "pt", "ru", "zh-Hans", "zh-Hant"};
 const char *const g_language_names[N_LANGUAGES] = {"Auto", "Japanese", "English", "French", "German", "Italian", "Spanish",
-                                                   "Chinese", "Korean", "Dutch", "Portuguese", "Russian"};
+                                                   "Chinese", "Korean", "Dutch", "Portuguese", "Russian",
+                                                   "Chinese (Simplified)", "Chinese (Traditional)"};
 Settings g_settings = {.fps_overlay = true, .upscaler_auto = true, .volume = 1.0f, .movie_audio = true, .gpu_index = -1, .gpu_profile = GPU_PROFILE_AUTO,
                        .gpu_gpl = GPU_GPL_AUTO, .gpu_memory_budget = true};
 

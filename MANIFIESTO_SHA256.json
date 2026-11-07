@@ -3,17 +3,9 @@
     "bytes": 385,
     "sha256": "ef07e1d35648822d12a3c5bec5fbfac3c16050c81b1160f54aed902a927ac9ef"
   },
-  ".github/workflows/ci.yml": {
-    "bytes": 1273,
-    "sha256": "d48eeafc3f022bf934a5010c597e607fd5080f59269eda2c9816a82cd3151700"
-  },
   ".gitignore": {
     "bytes": 237,
     "sha256": "253b94f17d26a18b04809eec5a009807bf6d342eda6be6d64339a251f948c901"
-  },
-  "ATENCION LEER PRIMERO.txt": {
-    "bytes": 2916,
-    "sha256": "10e3df450c37ac8d9b191f7be74b4d99fe7a4707fb3be3a2ea31409860a93ccd"
   },
   "Build Monado.bat": {
     "bytes": 2772,
@@ -23,14 +15,6 @@
     "bytes": 5832,
     "sha256": "438b51ca9cf0adf78588a50e310c24d790d916fbd931afd72ca8be47462613ba"
   },
-  "Crear Monado Portable.bat": {
-    "bytes": 2488,
-    "sha256": "2ac6c8f2f6a8c1fab675fd0d761d3d21d16d329ca1ae67dfb44f497e115fb08c"
-  },
-  "LEEME_DISTRIBUCION.txt": {
-    "bytes": 2983,
-    "sha256": "fe2945b47e7ccce07ea91b043affeaa68dc209644bf379c4b3ca5882ba2cacfe"
-  },
   "LICENSE": {
     "bytes": 1394,
     "sha256": "bf8634b745428f636325bf793a1cfac1521c598bd0f3b404c542d1a52d535c9a"
@@ -39,265 +23,25 @@
     "bytes": 3042,
     "sha256": "1fccc13d5a76f143ae5e1981c02fe0f7f0d7a3dbe1a60691fa51b93b26ec9d1b"
   },
-  "Play Monado (performance metrics).bat": {
-    "bytes": 381,
-    "sha256": "8d86011e1cea9ebc4c3e77d689cb4a168bc24b44c4c819c5b40cd7a56b5e6cfe"
-  },
-  "Play Monado (stutter diagnostics).bat": {
-    "bytes": 382,
-    "sha256": "19d81c49434c43b15a4fc43f39a1641d573022eafa969ddd041e6b11722a8d88"
-  },
   "Play Monado.bat": {
     "bytes": 206,
     "sha256": "4cca0023be308a803ea1152a86a555867ac66dbf59c67898a2b118ed908478e2"
   },
   "README.md": {
-    "bytes": 22725,
-    "sha256": "bca421d44a51ef844f6196e4d54b3cba17c621324bdfc9e6eb34cfb7a82f98f3"
+    "bytes": 1406,
+    "sha256": "c5ba1c09afbeee6ea329fa54f1ac7be487aa807e09fc4c94240b7f23e6bd2772"
   },
   "data/variants_seed.bin": {
     "bytes": 27425560,
     "sha256": "9c96777e46421830849320d87e0822d41761d27f2b6dec061cfe1948b51e782d"
-  },
-  "docs/AUDIT_XDE_COMPILAR_V3_2026-11-02.md": {
-    "bytes": 11148,
-    "sha256": "73e7ace9a76fab9768b03db9a0e794178b4fb209c7d99b630462d51297375660"
-  },
-  "docs/IMPLEMENTATION_PHASE2.md": {
-    "bytes": 1899,
-    "sha256": "326361d7526e2e19d6a3a5ef89bb0c34c2aa93772ed111688df847af0d9bdf57"
-  },
-  "docs/IMPLEMENTATION_PHASE3.md": {
-    "bytes": 1637,
-    "sha256": "adeb58cdccd577f092f87f99204717b0caadd6a537934bd98b1c9f5316240b26"
-  },
-  "docs/LESSONS_FOR_XC2.md": {
-    "bytes": 28956,
-    "sha256": "a181ee117e6f4047a6a05236522ccda8f760d8d19f6490b229378bc6b49daf75"
-  },
-  "docs/PERFORMANCE_UI.md": {
-    "bytes": 7627,
-    "sha256": "ad6d275e5786c5df41355451b339d1940d475e54a010b3f3cfd498f3c19265cf"
-  },
-  "docs/PERF_V5_VEGA.md": {
-    "bytes": 1559,
-    "sha256": "99ffb644a0b87efc4a6322dbef9c7f56a5fa9d558bf56d4e6ad3bd8ac8d3493a"
-  },
-  "docs/PORT_VALIDATION.md": {
-    "bytes": 10078,
-    "sha256": "71799247e1ad60b418d6c148eb04c00f20cd28caab9388f7a1acecb0a13308ed"
-  },
-  "docs/RECOMP_KNOWLEDGE.md": {
-    "bytes": 43581,
-    "sha256": "7570c86f5ee33c9c8100a257008bcbdd0594bcc25e000ee09e40cca24d36b415"
-  },
-  "docs/UPSTREAM.md": {
-    "bytes": 3281,
-    "sha256": "452af5830ef78b162d04e3bad54b6c54c36ea6c1b7056f436970dd2cc31f8bd4"
-  },
-  "docs/VULKAN_DLSS_FPS.md": {
-    "bytes": 6378,
-    "sha256": "b9da4d6e0f4f540d503ff385dba41679993b7f549aa957cc53567d21214e2a82"
-  },
-  "docs/adr/0001-base-lasrecomp.md": {
-    "bytes": 910,
-    "sha256": "b30eeb4177a480ae3b6c54338a424395cbf201204e5c612906e2d674154c9bbe"
-  },
-  "docs/adr/0002-version-2-0-0.md": {
-    "bytes": 401,
-    "sha256": "d992b922bbbae2c41b4e7f324e737bd6fc623b1a239dc1956dbf42d3ca5129b3"
-  },
-  "docs/adr/0003-lift-main-sdk-hle-movie.md": {
-    "bytes": 606,
-    "sha256": "cfdda17b2be1ff0231ac59d3365a178eac2cddda38acb75a55a9498799cda3e5"
-  },
-  "docs/adr/0004-memory-layout.md": {
-    "bytes": 529,
-    "sha256": "8bb65b858360c774e1af8bf3a0d55f73e8c7aeb46d66f039d18947d46e5289a2"
-  },
-  "docs/adr/0005-vulkan-first.md": {
-    "bytes": 404,
-    "sha256": "3be815acc2adc78770d952a65aa4016329a26f0cc8160afc73f3974a8fe61462"
-  },
-  "docs/adr/0006-common-runtime-game-profile.md": {
-    "bytes": 601,
-    "sha256": "59018cb98706d5a6ce628e9bad53e70c6e8ac62b473c14786e8773c74c63f043"
-  },
-  "docs/adr/0007-clang-o1-atomics.md": {
-    "bytes": 586,
-    "sha256": "d6926615fccc36969a45cfc7ace02d0607b36ecb7d0f9b3bab1ec87bde4507bf"
-  },
-  "docs/adr/0008-audio-wwise.md": {
-    "bytes": 512,
-    "sha256": "255b22e6ebf2f140b06db4de4a42fcb63b32d17f72cf73d80aa693232bab55d8"
-  },
-  "docs/adr/0009-video-ffmpeg.md": {
-    "bytes": 434,
-    "sha256": "6096153e671ba589f3807b224832b0ccb3b4d05a51b88b247cda6ba2f32e55e3"
-  },
-  "docs/adr/0010-diagnostics-from-m1.md": {
-    "bytes": 484,
-    "sha256": "3966591e2e16382a1a91e977e5bd2c045b3da9680f016eada8ec828758fdc84f"
-  },
-  "docs/adr/0011-performance-quality-ui.md": {
-    "bytes": 1298,
-    "sha256": "19d87b6f8c597c4f4e0f63f72811ed3bd47b3dab104d0ac7de279cc593507044"
-  },
-  "docs/bottlenecks_2026-10-20.md": {
-    "bytes": 4510,
-    "sha256": "9b8db3fbee92cdfa8a428e93e4f00f6f666994a099ae8c9a10115adaa9ae4d9f"
-  },
-  "docs/contracts/audit-format.md": {
-    "bytes": 331,
-    "sha256": "f784025b84c75ea9dd8ac89332635b2873b7242edd8570095579050d096a00f6"
-  },
-  "docs/contracts/evidence.md": {
-    "bytes": 356,
-    "sha256": "9ffc8b2d69c7aab45e8df4a9bee644821d6d32b5c7fd956152013a95ef20f8e2"
-  },
-  "docs/contracts/game-profile.md": {
-    "bytes": 878,
-    "sha256": "c5b19204b03f979eea51014301ab01f702ce83a104020a5a01da6dcc68c3e62e"
-  },
-  "docs/contracts/hle-abi.md": {
-    "bytes": 767,
-    "sha256": "5e089a54a262dd6e8c2c414c415f55b06cd244a6e9555aae651ed752d16232da"
-  },
-  "docs/contracts/patch-format.md": {
-    "bytes": 366,
-    "sha256": "d6286eab2e726bdb9f0cfc2fcf440d9234467f2b89f59c3f94b8099ab8bd692b"
-  },
-  "docs/contracts/route-format.md": {
-    "bytes": 320,
-    "sha256": "ca1ae3fb12a8a6cc75a3b3e24a8b1a24e7ad023d73060bd12e6bd97b29098caf"
-  },
-  "docs/dev/HANDOFF.md": {
-    "bytes": 92002,
-    "sha256": "b1baefe03a6e0f401d6d87089f6dd42bb753f7027ce58139df7183a843ac9728"
-  },
-  "docs/dev/plan.md": {
-    "bytes": 20820,
-    "sha256": "30d21c0d9cabd6e877e5f1a8a4255cf71bc184b205e30ccdeca7b1c311e0138b"
-  },
-  "docs/dev/research.md": {
-    "bytes": 10478,
-    "sha256": "c66499c4e44649309ecc04471016a2de283bfc28db42a5b03972f18373e76987"
-  },
-  "docs/dev/spec.md": {
-    "bytes": 15005,
-    "sha256": "758c258f44ed630b7e1e4b9482b8d4a51e7f0bcb12c4eb5dfb2802b84d04707f"
-  },
-  "docs/dev/tasks.md": {
-    "bytes": 167894,
-    "sha256": "ca9a12d314149504874deda68df9c1bf9a720bad9d53ebe635ccf849708eafc5"
-  },
-  "docs/evidence/M0/summary.md": {
-    "bytes": 391,
-    "sha256": "60847ac2193951067ad70173136198bb883df8b86883724a7a88141ff45c58d6"
-  },
-  "docs/evidence/M1/coverage.md": {
-    "bytes": 583,
-    "sha256": "d67cfaac68de9c568b12a62a4281cb88ced223a28d111bcd494b90a459973974"
-  },
-  "docs/evidence/M1/summary.md": {
-    "bytes": 699,
-    "sha256": "bc861d7d5e4347c50434c95142bf3f3fb6a64652caeed39371a57529ce7590d4"
-  },
-  "docs/evidence/M2/coverage.md": {
-    "bytes": 583,
-    "sha256": "4c1ad2f0fcdad2720ae275c9a6fcf150899e498405dc98daa7e102a9f9623446"
-  },
-  "docs/evidence/M2/summary.md": {
-    "bytes": 1042,
-    "sha256": "96c4c4ed1ac1e7018ddfaae7b4a42c0d6cd6c4a2b80e28e4386c9df9e7815ac6"
-  },
-  "docs/evidence/M3/hle_coverage.tsv": {
-    "bytes": 316,
-    "sha256": "432205bcababf04f65c269228c5cf946329aa974af2d81141314604eb6396844"
-  },
-  "docs/evidence/M3/summary.md": {
-    "bytes": 2116,
-    "sha256": "908cdf731b7a727cb06307fd2ad1c788353f7da9ff54e7064a7f0ed1ce9bc819"
-  },
-  "docs/evidence/M3/usage.tsv": {
-    "bytes": 27620,
-    "sha256": "c1b0f3d113e038421b3f20acdc6343ebe698fe9b2594b55750b24f742ca0eff5"
-  },
-  "docs/evidence/M4/summary.md": {
-    "bytes": 3572,
-    "sha256": "1809157532cf449c033aad84e2122ff5a703dedf042d9f028bc246181943a7a3"
-  },
-  "docs/evidence/performance_ui_2026-11-04.md": {
-    "bytes": 10701,
-    "sha256": "2aad674aca9ba722f5f3ea1784a2b512210fa8e7801e874bc3f2179f6494aa39"
-  },
-  "docs/evidence/port_2026-11-04.md": {
-    "bytes": 4885,
-    "sha256": "c80d8dc7f24da6ec747a7bedebdf26d52abf0811d5d5afbc68b88cb0b865188c"
-  },
-  "docs/graphics_options_research.md": {
-    "bytes": 8412,
-    "sha256": "3c7aef190e1b6a5a1ba1cf0375b38a3f8ec0725eec74cfd2898554dfbe78ce77"
-  },
-  "docs/handoff_shader_pipeline.md": {
-    "bytes": 9460,
-    "sha256": "8c1ad8b30d69770a9a92bef9a378a6d012d33fa34ba8bd7f6b3e21982b6f595d"
-  },
-  "docs/hle_audit.md": {
-    "bytes": 11925,
-    "sha256": "75c075a83e15990dfe1fe6ebb5cafa1d4ea37e7b4a12de5ba9f321da346c443a"
-  },
-  "docs/inventory.md": {
-    "bytes": 7012,
-    "sha256": "664b3e880962d41b64eeaa4362578483d017914aaa5698008f4ea08711f72840"
-  },
-  "docs/lessons_astral_ssbu.md": {
-    "bytes": 10213,
-    "sha256": "66021f5b4825cccab808b154eaa16a4885a392a303dfb85598e355a7b5c2811b"
-  },
-  "docs/lessons_other_recomps.md": {
-    "bytes": 3584,
-    "sha256": "0a915012ac7777dc4102ef886588f2cd6b8df85809f78f221b66ff4aa4edf37c"
-  },
-  "docs/lessons_perf_recomps.md": {
-    "bytes": 3883,
-    "sha256": "147bbeca2644da37490a784ccfe332ec1e35f5c7a4d7f2df80bad37603b57ab8"
-  },
-  "docs/lessons_windowsmash.md": {
-    "bytes": 3071,
-    "sha256": "42948bc7eb5d310515bf29d7411fb216b75843587f721304cdfe4bd32282f358"
-  },
-  "docs/nso_stats.json": {
-    "bytes": 2680,
-    "sha256": "3afd0baf756bea2d3a550c2474312946533166406142c9662516c52718172eb0"
-  },
-  "docs/party_switch_research.md": {
-    "bytes": 14652,
-    "sha256": "be1d4ff96ee7e8b3ba05c316f4376907715402d0c3c95258b7fb653b993c543f"
-  },
-  "docs/plan_party_switch.md": {
-    "bytes": 5068,
-    "sha256": "98edb24eae7ed6864b12db2de5df80c55ba13227f79a5335d8e8f9530ae18f1f"
-  },
-  "docs/spec_lowend_gpu.md": {
-    "bytes": 13826,
-    "sha256": "ddbb2f48b3e1ecfdca826175774919fd54398b3b9968073d83574b2a1794c645"
-  },
-  "docs/worklog_session14.md": {
-    "bytes": 4829,
-    "sha256": "f574dc2f29ccbb5f99d80a16225d471e701c82dd0a66a7f00a66e944e42173a4"
-  },
-  "games/xcde/hle_classes.tsv": {
-    "bytes": 1862,
-    "sha256": "a581307f33a219fbaf53891c9b71182ea6702c4f46d90998a9c1988f950c3669"
   },
   "games/xcde/hle_symbols.txt": {
     "bytes": 359,
     "sha256": "5b5946195152a2e24d9e1feeed5160899add47f16802eda6dbf24614d25ccd6b"
   },
   "games/xcde/patches.py": {
-    "bytes": 3202,
-    "sha256": "6536d643a61b42ae6b5d0763b3e079441552d0d36eec85f6c16faa2ffa396ec4"
+    "bytes": 3902,
+    "sha256": "b9004b7b2d4f3da5e5471724b11d439c6c17f495b136fa986c8c580ed3460b1d"
   },
   "games/xcde/profile.json": {
     "bytes": 1299,
@@ -392,8 +136,8 @@
     "sha256": "53f1069d8ff4d35f5fb754ecae61c8f9ad0bd384e2f129dc381ed3a0b404c5c9"
   },
   "runtime/hle/input.c": {
-    "bytes": 40794,
-    "sha256": "410dcbb5f6a8897f6414e264b8f575edb4d6e9de233fe9d498340f9e525a2240"
+    "bytes": 43985,
+    "sha256": "50566c065f50b8519c2837b1b362cd7e24bcb76d42d2863b9d4ca6c53e015b5f"
   },
   "runtime/hle/movie.c": {
     "bytes": 38214,
@@ -408,8 +152,8 @@
     "sha256": "c79c1ea8fc73fb2317f7b0e84ac46be406988653de3800a846a4268608e613a7"
   },
   "runtime/hle/party.c": {
-    "bytes": 50730,
-    "sha256": "8912f3b2e10330568eb6760f9bcddbcc3ddeb980328db4f73346c1e5860fec1e"
+    "bytes": 51408,
+    "sha256": "0484360c111a26143068b7c3f3d28156d6d9c8c8cdcf3bbbbac615a63288b9d1"
   },
   "runtime/hle/pl.c": {
     "bytes": 6244,
@@ -436,8 +180,8 @@
     "sha256": "eb7625e4b278333be15937cba7d079818150dbaf904993de991a34d6ba94da2b"
   },
   "runtime/host/main_boot.c": {
-    "bytes": 6252,
-    "sha256": "d2adf36be67a2bf282b899ebb85dbf8d528080bd80bda5c922944e0546972b2c"
+    "bytes": 6608,
+    "sha256": "c285994c18f6b9f89d7bb5769d13dc8c0e18f8db50b5ee0e4ea6ec11e9036a0b"
   },
   "runtime/host/menu_stub.c": {
     "bytes": 461,
@@ -452,8 +196,8 @@
     "sha256": "7182f452f828db33b663c3d397379b943315641f9faaea8f00cb538f3bb487fc"
   },
   "runtime/host/settings_ini.c": {
-    "bytes": 12884,
-    "sha256": "d3c39601d5393cefc885dee20fa9908610c8eae0b93b544c431e65443e1eb61b"
+    "bytes": 13098,
+    "sha256": "eaeadbc025a57667ea0e44e6f1e8c60f4bb4fdd2bfabb21f9bc3191c282eaa2b"
   },
   "runtime/host/stubs.c": {
     "bytes": 1314,
@@ -464,8 +208,8 @@
     "sha256": "0d5fd04ec7730dd96db5829cf60ddd70f52d0c853dc02150f838484a6682680d"
   },
   "runtime/input_bind.h": {
-    "bytes": 4378,
-    "sha256": "7ff5a54dd34d353d018ceefcbd8571ddb44eb2460dbbd160f7566903b1524f32"
+    "bytes": 5453,
+    "sha256": "3aea6e24ad2f1aacae6219159895389e85cba39d9fcfcbf8016cf89fd3eaa237"
   },
   "runtime/ipc.c": {
     "bytes": 9671,
@@ -515,10 +259,6 @@
     "bytes": 162633,
     "sha256": "893530971726d7b57df195ce0fe670a5fc2085d5a14676c98cd86a9979678371"
   },
-  "runtime/nvn/metal.m": {
-    "bytes": 66506,
-    "sha256": "28980a53ab4bd7b8773dc72f5613a5a772d7a872cd914490540f1fc22785cd62"
-  },
   "runtime/nvn/nvn.h": {
     "bytes": 6386,
     "sha256": "543ce04b0bfab9263ab6f19812a1f3027f1ef94f0e472b2cf7376cdd9f3610f6"
@@ -538,10 +278,6 @@
   "runtime/nvn/renderer.h": {
     "bytes": 939,
     "sha256": "83bce0ca993f4ae0aa601581f91c126f63350e008cecc0ab5e675e9d9176ca64"
-  },
-  "runtime/nvn/renderer.m": {
-    "bytes": 147860,
-    "sha256": "c35056c4957441e3ef7e1d6428e123b611f9139e6bd6c7d7759459aebcdc970a"
   },
   "runtime/nvn/smaa_data.c": {
     "bytes": 704,
@@ -564,16 +300,16 @@
     "sha256": "7747d5ff2f8fe5f311ebdde7cd2c034de77a69ff69303bfccca9909d2f726c70"
   },
   "runtime/nvn/vulkan/device.c": {
-    "bytes": 94799,
-    "sha256": "210978c0ffd1049062aa10adeccb8005889eb21ec8725e28797cfc411ebc402f"
+    "bytes": 96926,
+    "sha256": "173de78a7732c1cd1422c4b26cd40ddcd2324e80ec8019c21245bac24feaabfb"
   },
   "runtime/nvn/vulkan/dispatch.h": {
     "bytes": 1195,
     "sha256": "4a6694e192739384136635e0c05b94ac709d74ab9089bda00b31f928c69ed2f3"
   },
   "runtime/nvn/vulkan/dlss.cpp": {
-    "bytes": 22788,
-    "sha256": "f62b913aaacf2ccbd68354a4b97fa1ced3548d0d7344163d7f286f11eb89cf08"
+    "bytes": 23621,
+    "sha256": "3c8776c443dcf2c083b8dc64bd116659dc6d7a991fdd5fe9f664df3a8e4ab849"
   },
   "runtime/nvn/vulkan/exec.c": {
     "bytes": 454828,
@@ -604,12 +340,12 @@
     "sha256": "0478cc35f00d40be1968807987b8caccdbd9f6bf6f1d05197cdaefb7a8c2a343"
   },
   "runtime/nvn/vulkan/temporal.c": {
-    "bytes": 40105,
-    "sha256": "0c1843028922ff3df89e3f15ba07c4224feb213c3252e9bb4ab69644ea51b932"
+    "bytes": 40272,
+    "sha256": "5830bf70fa5601e075521f487119e93d8c390bd00a04cb310857234d57bbd361"
   },
   "runtime/nvn/vulkan/temporal.h": {
-    "bytes": 1749,
-    "sha256": "6f4d3cdadde45b3d7bceb4bcbe58ffc185cd77c0a987d00d61ba21c99cb941e6"
+    "bytes": 1779,
+    "sha256": "67091232e3dbfb18787827cc54cbb0b69962c10e69cc0f7870dbf362329d2216"
   },
   "runtime/nvn/vulkan/temporal_fg.inc": {
     "bytes": 12840,
@@ -752,8 +488,8 @@
     "sha256": "2e96b0a32fe4d63808bd74e4b85f60f1a2f2a131d80e2e7401b2bd73c020da85"
   },
   "runtime/ui/menu_vk.cpp": {
-    "bytes": 25357,
-    "sha256": "67a5dec3dad264cea9b3eccae40d098de43103fd18bb15c15d84f102d57508ac"
+    "bytes": 25661,
+    "sha256": "9ff34d4c3febcc3c9c9c02cad0e7ad19ed0847fbe0a1ca384d0531c56fc1e6f4"
   },
   "runtime/ui/quality_controls.h": {
     "bytes": 3906,
@@ -787,21 +523,9 @@
     "bytes": 4258,
     "sha256": "ff6342dccc7e6a7cf6a35baea270a6f699e299bc89cf09a372c60ddfbbc8cd75"
   },
-  "scripts/ci.sh": {
-    "bytes": 223,
-    "sha256": "addf2a53a0e119ad9a2e8cccdbf2dcde2f6af117ee12a4a648b48ebf2bf0b2dd"
-  },
   "scripts/copy_upscaler_dlls.sh": {
     "bytes": 826,
     "sha256": "3b55bbcc995a3c7cd131c070cbcde7e9a4615f202147c65424fd7b6f5f4641cc"
-  },
-  "scripts/drive.sh": {
-    "bytes": 1222,
-    "sha256": "d0ef0a8388fad97f951c870aa94c1d94fceb3390f88b7deb5660f2c8cbbcd501"
-  },
-  "scripts/drive_env.sh": {
-    "bytes": 1565,
-    "sha256": "bb11bcd7b109aa8d0903955bfa7bf77e101a33626fc6685082d1f5c6ccab5c7f"
   },
   "scripts/link_boot.sh": {
     "bytes": 1066,
@@ -811,317 +535,9 @@
     "bytes": 1710,
     "sha256": "f86e56e7fc4c7bd6014e5e7678dceb3a1cf831704d4b6d89936bfd1d8db5cfed"
   },
-  "scripts/make_dist.sh": {
-    "bytes": 2116,
-    "sha256": "8f1ab914a5ac878544b0d0b2f663d8484bbdc3d0509e3186d92b584e814cbb90"
-  },
-  "scripts/native_tests.sh": {
-    "bytes": 3270,
-    "sha256": "13ddc8ec4bd909bcdbdfb28d41e22ecfbd9871d46884c11269fdd22a5d9b9a7b"
-  },
-  "scripts/play.sh": {
-    "bytes": 828,
-    "sha256": "e79ca18073608cd4685de83a498dcf18a2422d4730a204dbed26a20477a55454"
-  },
-  "scripts/repro_stability.sh": {
-    "bytes": 1238,
-    "sha256": "45a4296f0e766673f1cd7a28cfdf38c4eb2e65eedd4fe25d95fdda2350e6ff96"
-  },
-  "scripts/rt_run.sh": {
-    "bytes": 2034,
-    "sha256": "a67777e8c2271aea657fa1a11a330c6e6ba57fdce268e59fd2680eb92d4d5deb"
-  },
-  "scripts/rt_summary.py": {
-    "bytes": 1854,
-    "sha256": "3326e658ae221388f06c5a7ccd647b54c1badc0e5ba885437516725226232bcf"
-  },
-  "scripts/soak.sh": {
-    "bytes": 1792,
-    "sha256": "d309cee741bae652b69462a814a7a07577572ff1e32e43cfed2ea6697bfcc20e"
-  },
-  "scripts/wt_setup.sh": {
-    "bytes": 1102,
-    "sha256": "fa78d40fe87e217d6afa732ad39bd821798dc02d119041ece8f8eb2bc561da69"
-  },
-  "tests/gpu/GPU_COMPATIBILITY_MATRIX.md": {
-    "bytes": 3764,
-    "sha256": "d05b3a225e118863564d5266aa71a6866f9b3b3519ec18bff8df89df901f55df"
-  },
-  "tests/native/test_condvar.c": {
-    "bytes": 2999,
-    "sha256": "76a3e5099bfaaf98885d7fdac3e9728542626cfe13ba6990ac116d59b73a4e5f"
-  },
-  "tests/native/test_display_options.c": {
-    "bytes": 1731,
-    "sha256": "624ffbd7181cab2d6b10f6d48f2123206b11fa139da4a70a9a44b601efe35c67"
-  },
-  "tests/native/test_fibers.c": {
-    "bytes": 6107,
-    "sha256": "aac72464dfa5ea56698694b69177be94fed96402f829055c56693a05694d74fa"
-  },
-  "tests/native/test_gpu_probe.c": {
-    "bytes": 3462,
-    "sha256": "ab18e97032b7d357931a3424468e62f86ec97b85c4fb6cba066dfa2f6932908c"
-  },
-  "tests/native/test_movie_buf.c": {
-    "bytes": 2024,
-    "sha256": "8e29cf65e97da11bff0adafc2550fa11f5b93969fddd196b7eeec8e349d94e71"
-  },
-  "tests/native/test_nvidia_signature.cpp": {
-    "bytes": 787,
-    "sha256": "4000ac7cd29dd7018112c478f4b4a421f32c6638067fe60ceb221f034575349a"
-  },
-  "tests/native/test_output_scale.c": {
-    "bytes": 1362,
-    "sha256": "1bec6b54a37ae3d0abb958adf8eef9f31d33de8622e4423dca9b35539bb65c98"
-  },
-  "tests/native/test_port_core.c": {
-    "bytes": 5766,
-    "sha256": "79a81a1d77351847af0ca77734cc41dcaf5b5393dbf43df8ce52302c9badaa65"
-  },
-  "tests/native/test_render_policy.c": {
-    "bytes": 2533,
-    "sha256": "938ed70fbb136f2992dc1d5306ff68d27edc0f79e7c9abd22086950cd133d04b"
-  },
-  "tests/native/test_romfs_cache.c": {
-    "bytes": 2642,
-    "sha256": "0aa88e9305d367ebe04f059b6660e580aede31657aedb75f425d065fd8d09a60"
-  },
-  "tests/native/test_settings_roundtrip.c": {
-    "bytes": 2348,
-    "sha256": "f5318571c9e8e1f7b7c945d0dc4a15a5aaf538bb4037f7b74ff5cb9aca0502a0"
-  },
-  "tests/native/test_tegra_block_height.c": {
-    "bytes": 2322,
-    "sha256": "09d6b28f6b88574444035059a71c88093058f2b3b86f42f076b7471ee304823f"
-  },
-  "tests/native/test_tegra_copy.c": {
-    "bytes": 3657,
-    "sha256": "7c25e4c4f45ed2adebbed848ba67bc18c5019e8160160550415106153a7cff9b"
-  },
-  "tests/native/test_texture_index.c": {
-    "bytes": 2333,
-    "sha256": "e79d6b2f38a6873da9e375461362d47767e0e85b18cdc145c00da906e95c8ad9"
-  },
-  "tests/native/test_time_math.c": {
-    "bytes": 1496,
-    "sha256": "a1ee10372f4b44b9c38c2a6d37361e1f16ca453ba38de9d6bb8ecbbe0b4136a2"
-  },
-  "tests/native/test_translate_ldc.c": {
-    "bytes": 3468,
-    "sha256": "50d1bf2ec753334d3c204e999572954683ae501cdd49a03d53167f4f9b55376e"
-  },
-  "tests/native/test_translate_tex.c": {
-    "bytes": 10590,
-    "sha256": "9a8c9a5bc37f7b1d0223a1998cdc39f4bee35724cb68b5aeaf964ab6212f4b65"
-  },
-  "tests/native/test_translate_xfb.c": {
-    "bytes": 2602,
-    "sha256": "81dc78bc72318fd44d5fc3dc7b13558d4b43fd0a324bfb6ff9293fceaeeb6057"
-  },
-  "tests/routes/README.md": {
-    "bytes": 1011,
-    "sha256": "f482e7ce654c4bb2f06b653d58338f15851d9d882074078def3836befbab2ad7"
-  },
-  "tests/routes/battle_a.txt": {
-    "bytes": 3494,
-    "sha256": "3f43d8f936721b614b7ee1a31be4cb384e783050c71b8a833cbd3a7e384a4aa2"
-  },
-  "tests/routes/battle_b.txt": {
-    "bytes": 6357,
-    "sha256": "2662ed0ed0731f22255ac4db86856e3a96c9b082ba7970b473213144b3855716"
-  },
-  "tests/routes/change_time.txt": {
-    "bytes": 462,
-    "sha256": "85a49b095d73bab00a63e58b3c91faf3fabbd238e3f02b9628aad8efa65c01f6"
-  },
-  "tests/routes/cutscene_walk.txt": {
-    "bytes": 1606,
-    "sha256": "d99a9f5a7510f5773ab100c2c6bc713c7c10200b36bcd06c8f242e58e7c1d8e2"
-  },
-  "tests/routes/input_sample.txt": {
-    "bytes": 165,
-    "sha256": "4f468ae52761520185cec38986d9dff050c4138681fe52a39705a4cd83fbeea6"
-  },
-  "tests/routes/lab_walk.txt": {
-    "bytes": 421,
-    "sha256": "122c969d0397a5b211d461146722a00c9819262f369ef707a2f324cc651f3bec"
-  },
-  "tests/routes/load_a.txt": {
-    "bytes": 345,
-    "sha256": "fac5ae0264c877ed300c62d40caa362bb1d08b8631179ea9c278024fc1eee1ad"
-  },
-  "tests/routes/load_a2.txt": {
-    "bytes": 399,
-    "sha256": "bd6365f778c1f59008301572594d0862d9e67da51e344bcb99c139798e12f1f9"
-  },
-  "tests/routes/load_spin.txt": {
-    "bytes": 405,
-    "sha256": "31cd45091c54bedb8f741d7368f569acccb2beed4f1f04398dfbfc72d64b61cf"
-  },
-  "tests/routes/load_walk.txt": {
-    "bytes": 13360,
-    "sha256": "73db2b69df48d22bd5914ee6a5f4fbf6553bd7691e8d5d0de2a2aaf6d17c60d3"
-  },
-  "tests/routes/menu_all.txt": {
-    "bytes": 3916,
-    "sha256": "fb589fee45d7904d95f2d68375848a18419d4ca1f2b4f719006830bf5b43cb78"
-  },
-  "tests/routes/menu_x.txt": {
-    "bytes": 283,
-    "sha256": "759b3ea298e45579ec63b93160f28340890aa65ff58d688b1674136904451ccc"
-  },
-  "tests/routes/new_game_a.txt": {
-    "bytes": 116,
-    "sha256": "5ea08a296d6face202b80c47c6dc958d2c325b64b675d8175aa650d9244c5206"
-  },
-  "tests/routes/new_game_b.txt": {
-    "bytes": 424,
-    "sha256": "64cc20403109aa8d57443aea62e3b24f8ed32d1d9025598a03aabfefef3108b0"
-  },
-  "tests/routes/new_game_c.txt": {
-    "bytes": 469,
-    "sha256": "82ccfd9fc2221f89917d5a32918a2949dbf018025de07daf8e69b45150b96953"
-  },
-  "tests/routes/new_game_d.txt": {
-    "bytes": 653,
-    "sha256": "7ceb4737e241ae10f4471646221c3509fcf47c2f5042c66e16bea2502b3d3a4e"
-  },
-  "tests/routes/new_game_e.txt": {
-    "bytes": 5899,
-    "sha256": "7f7321b30c0a6d984953460f903ac39f63642fcb3a4e65f7aaacbc59db003d11"
-  },
-  "tests/routes/new_game_f.txt": {
-    "bytes": 14438,
-    "sha256": "c3f32746660ebaa340240962c323be05d474698f44cb253f3562df077a3c59ba"
-  },
-  "tests/routes/new_game_g.txt": {
-    "bytes": 700,
-    "sha256": "d63aa828d36af2d70f0b0e97c3caea6694f90ed3897a02c6bf28fa3a52961782"
-  },
-  "tests/routes/new_game_h.txt": {
-    "bytes": 8942,
-    "sha256": "f36e6cee91c559340c47346b6080662ef0ccca12d5341dee1ba6444dbf165cf6"
-  },
-  "tests/routes/new_game_i.txt": {
-    "bytes": 6643,
-    "sha256": "c8efc130c2d109545148aaeaf29931b3b511fef11c4dcc55fe0220716d90a2ce"
-  },
-  "tests/routes/new_game_j.txt": {
-    "bytes": 25051,
-    "sha256": "404928fa0b0bc76ad722dac1414934fc12bf50236d9a2f3277c272fe8eead8fb"
-  },
-  "tests/routes/realtime_tap_a.txt": {
-    "bytes": 1314,
-    "sha256": "704a75baf92e1594e6329e26f09ca1b9c3a3a4a4e093a93e65015fe29c4d6467"
-  },
-  "tests/routes/realtime_tap_a_long.txt": {
-    "bytes": 4809,
-    "sha256": "398b9989fa0c62f492ffb8ee20b1ee892df78f809188b1c7a5746535c0a9edd2"
-  },
-  "tests/routes/save_a.txt": {
-    "bytes": 512,
-    "sha256": "40314a85a6b6f7e11386c8ab6789365912a0e277d0789c340975d9908b6b1f8b"
-  },
-  "tests/routes/save_probe.txt": {
-    "bytes": 354,
-    "sha256": "1b8f679e2085ca5103fff27a4d2ccdc58a3337a3fe9d22e1b6c2890c51fc45b8"
-  },
-  "tests/routes/title_idle.txt": {
-    "bytes": 114,
-    "sha256": "6fa6b9ae9f5fc79f9839a11433370a2fd52b9f48952faf2298af65e7cf5cf576"
-  },
-  "tests/routes/walk_far.txt": {
-    "bytes": 3036,
-    "sha256": "61b6da1a207db540f24aa5a449c4aaf4b54410918c9eb85f17257749a55b4515"
-  },
-  "tests/tours/battle_all.txt": {
-    "bytes": 5116,
-    "sha256": "5167d2797281ce88df6acedfe4ee60add0c6a09d2b05e6cf837dd6a4e5544f78"
-  },
-  "tests/tours/battle_story.txt": {
-    "bytes": 11376,
-    "sha256": "4a279461b472028d529b73e408924c9dc9da441c550761437e73f3f65948fa90"
-  },
-  "tests/tours/battle_types.txt": {
-    "bytes": 17336,
-    "sha256": "0101e288c4b596d6d74b0b6304c9ab4696e9df0b77ada02f303a1475c9f41c70"
-  },
-  "tests/tours/events_all.txt": {
-    "bytes": 20400,
-    "sha256": "3cbe8941e33888aeedb7c7067db5f4ea91bb884ceab7b6eee3b558684d16e000"
-  },
-  "tests/tours/fc_all.txt": {
-    "bytes": 1696,
-    "sha256": "81ca2948fab324fd4bdd0951beb3ea7a18b5b4cc4b10317859ff44ae27d14e3a"
-  },
-  "tests/tours/full_all.txt": {
-    "bytes": 74512,
-    "sha256": "51d113f0548e9027dc3ea61c38abb01dab3a89f8fd34afe5f1558fe22b10af8c"
-  },
-  "tests/tours/full_fix.txt": {
-    "bytes": 11886,
-    "sha256": "27615579ff638635c19cced782347f04a173461a5a47fdba12b8bc9ea4756705"
-  },
-  "tests/tours/h2h_all.txt": {
-    "bytes": 5715,
-    "sha256": "d89f6e5934b0898e30b3bdb7e31e24eb55897a2f4117a7a57ddb64f47f976473"
-  },
-  "tests/tours/maps_all.txt": {
-    "bytes": 12258,
-    "sha256": "a55b99dcd4cc1630ce5505aa4afc1979f8db82bd6e0e3f1661798feaad0c8caf"
-  },
-  "tests/tours/sev_all.txt": {
-    "bytes": 37323,
-    "sha256": "c86b8a2a525b234b6d7522b23b99f55f766160f8bc6d74d05795e3598ac5377c"
-  },
-  "tests/tours/sev_other.txt": {
-    "bytes": 31608,
-    "sha256": "7ee56354b71646d603e38af89474d95f60b053095a81508fa959579738935f16"
-  },
-  "tests/unit/test_check_dump.py": {
-    "bytes": 5329,
-    "sha256": "3d1716f72e5edadfc033709a377053b4e4bb5f39fedd553024fe7c63f515dab8"
-  },
-  "tests/unit/test_diag_tools.py": {
-    "bytes": 2093,
-    "sha256": "7113c1a0a1e1f600a714a016577d3c21f4a035c9e4cd128475b463affbee9dbd"
-  },
-  "tests/unit/test_install_dlss.py": {
-    "bytes": 1815,
-    "sha256": "6b1f4e2e906fd4184b29142119166883e9d42c00c682a9b461a2762e90440326"
-  },
-  "tests/unit/test_jumptables.py": {
-    "bytes": 8788,
-    "sha256": "a16a7d584676cf992c61a7afcc99cc849af37fa2d8471a2354b87a69ee337b46"
-  },
-  "tests/unit/test_make_portable.py": {
-    "bytes": 3714,
-    "sha256": "a2cb64035cb89192a11de2bd541fa2930db72cc8a8ce88fc5c9c28e503085590"
-  },
-  "tests/unit/test_package_guard.py": {
-    "bytes": 2824,
-    "sha256": "a8e553c3f3f28e661c4b2eb432bb28d1d616b139d02ad2e30a055d107661dbaf"
-  },
-  "tests/unit/test_patches.py": {
-    "bytes": 2501,
-    "sha256": "e3705f004df33a70873e9c9d494b7201a1e517dc6206ef32a08414715fae0891"
-  },
-  "tests/unit/test_performance_report.py": {
-    "bytes": 1962,
-    "sha256": "3bb707f2babfbf6ddc889cdd9ded5617c040093f775caeac893a97810dbe414e"
-  },
-  "tests/unit/test_timed_route.py": {
-    "bytes": 1072,
-    "sha256": "9a13b10038dda8ef720d821648959ffd9ee0e2f9a40d6194a1fff678677c6263"
-  },
-  "tests/unit/test_vk_source_contracts.py": {
-    "bytes": 4654,
-    "sha256": "5cd0126d4e98a3e0fdcafd13c61e5a3ceaf6c3168b04d2a3b259bc6acbe5e89d"
-  },
-  "tests/unit/test_wav_report.py": {
-    "bytes": 1530,
-    "sha256": "948b0b49984fabe2512e0a325f25cca967629e7a337f81ef85ddf141b2c2536d"
+  "tests/native/test_stick_click.c": {
+    "bytes": 1329,
+    "sha256": "d9ff5fbe598dde3a7a5e608530d19d930e536e862cbc7b8acfed126be8e2b336"
   },
   "third_party/bcdec/bcdec.h": {
     "bytes": 79434,
@@ -1331,42 +747,6 @@
     "bytes": 1559,
     "sha256": "c7782fdc4dfc64f7e6b09f37a694dcfa64034b712903986d252b13a08d5849cd"
   },
-  "tools/analyze_nso.py": {
-    "bytes": 3240,
-    "sha256": "305ecb2871d9f60636a09cf2d97836d2d6475dc4de7c1fa45b0020fe453e4b5d"
-  },
-  "tools/battle_tour_gen.py": {
-    "bytes": 3158,
-    "sha256": "cdca628ed08659874fba5b018ed882215b015a4ed1d9ca9ebeadf9d216054f9e"
-  },
-  "tools/bdat1.py": {
-    "bytes": 2891,
-    "sha256": "aa6f46306ded983208d7cfb2cf3fec4fb78dde7d88d5d441cb35369876e0c668"
-  },
-  "tools/benchmark_native.py": {
-    "bytes": 5486,
-    "sha256": "4640d6d592c4748feff47100fa2a4837933d39de9c8d87e92bbebfb8210778d4"
-  },
-  "tools/boss_tour_gen.py": {
-    "bytes": 2008,
-    "sha256": "c80b19322ee8f68a6ddaac13cf9c76c72fbcdbf8da58e85d5689825f8bb0f426"
-  },
-  "tools/classify_br.py": {
-    "bytes": 2994,
-    "sha256": "4f3671afc29b823d2e3ee20b8a3c6308ec84dedde69d456b2dd141b95386c393"
-  },
-  "tools/collect_gpu_diagnostics.bat": {
-    "bytes": 1212,
-    "sha256": "3b61cd906ce137dc9e8980f45cff2e29ce9f44957dab0402dc502027062a6b95"
-  },
-  "tools/contact_sheet.py": {
-    "bytes": 725,
-    "sha256": "09cef4701fce6068d75576d2a2a95743dac5a7e262c3b7e63bc6b7cf0035937a"
-  },
-  "tools/exe_sym.py": {
-    "bytes": 2667,
-    "sha256": "b8f66a2d1facc62400d6099c700fe9e365d8520627fec0608de5a0a1bbfe17bb"
-  },
   "tools/extract/check_dump.py": {
     "bytes": 5568,
     "sha256": "672709a551c6ad2b9ff098cfdaa5ce193da9f06344de154d09b4e3705d82d516"
@@ -1375,14 +755,6 @@
     "bytes": 1027,
     "sha256": "97b13a2ccfbd669e14e7ab6df8905ae31afc065a00c51715d8c6465a0dc00f63"
   },
-  "tools/flicker_scan.py": {
-    "bytes": 2888,
-    "sha256": "8c114db43bd8dfa5f0a1042e83804498bce66fdca91ad2ad715306c01e66d15a"
-  },
-  "tools/flicker_view.py": {
-    "bytes": 4904,
-    "sha256": "6caf2992676d4056a124823bb75d185f9c0ed470e52c3026c39d9ea259573774"
-  },
   "tools/gen_all.py": {
     "bytes": 2670,
     "sha256": "cd82e7c55e52e00b54ee43a3214d16bc5eb04e42c725345f6e44700bebb2e5cd"
@@ -1390,26 +762,6 @@
   "tools/gen_smaa_inc.py": {
     "bytes": 606,
     "sha256": "aa7fe094dc5fd0af07f860eed2770ee36a5f86cfcb09ee4d1e783153de25fb49"
-  },
-  "tools/gen_soak_route.py": {
-    "bytes": 1770,
-    "sha256": "960a2686a91c6f50bd63875fff63b9f39e026ad208e8c55cc1e7a5f8b47fbbfc"
-  },
-  "tools/glsl_dataflow.py": {
-    "bytes": 3482,
-    "sha256": "95eef4f0d732151b774b6b1cd818286da0b064f81deb3529995d682f8a11f45e"
-  },
-  "tools/gpu_diagnostics.c": {
-    "bytes": 1244,
-    "sha256": "3cc5a4a42061dc9836ecc150cde28558ae6ce08ac4da86ed8be92ee55134d5c4"
-  },
-  "tools/hash_diff.py": {
-    "bytes": 1862,
-    "sha256": "087f52fcaf954679805f13d507b5a6f35ee72bffc13566f68ccff27dccd189ec"
-  },
-  "tools/hle_audit.py": {
-    "bytes": 8253,
-    "sha256": "a4d95398785da8b319e5e542eb048cccf1a89490734f44cf76b9c337f08b5e60"
   },
   "tools/install_dlss.py": {
     "bytes": 4625,
@@ -1420,16 +772,16 @@
     "sha256": "dfdb55cad0a56659ddff4401b36dd9bd9533a136ba730a90bf43f0794357e3e4"
   },
   "tools/launcher/launcher.cpp": {
-    "bytes": 84434,
-    "sha256": "e53481b8d997b8492e7948ce445dbc74bf167cc5ffa154490794e3f59636adb6"
+    "bytes": 84879,
+    "sha256": "3d279694d957cade5562c8eb6cea7cd5cd4170d8454b4d5c8ae5f61aae5e2c98"
   },
   "tools/lifter/analyze.py": {
     "bytes": 3335,
     "sha256": "6839cbaee754a6c58669c58b77fb0ab543ac2be70ecf0ca32c9adf8f0e6b4283"
   },
   "tools/lifter/gen.py": {
-    "bytes": 27493,
-    "sha256": "9405788d746c04132dd190d9b4ba2f5afd9b97e4d3aaabac6effb6290195738c"
+    "bytes": 27831,
+    "sha256": "37fddd9dea1f40abeccd23880a6c9fbc279e5a2aa091f869e1cf3620334ad201"
   },
   "tools/lifter/lifter.py": {
     "bytes": 30354,
@@ -1440,111 +792,19 @@
     "sha256": "edff083720f9ccdd6074a81197a718e4ee3c63f5aad5e5005423ec6b43ff14ab"
   },
   "tools/lifter/patchfmt.py": {
-    "bytes": 1591,
-    "sha256": "a00d19a240c2bd1f1c44fd0009d6f09add8f84e23521350d61c06566b6021a55"
+    "bytes": 2687,
+    "sha256": "b6d92e9be9672dd805dee7cecf585abb4d5f2ede5de37eba5a32fe1040939d0f"
   },
   "tools/lifter/simd_c.py": {
     "bytes": 52282,
     "sha256": "1db85aaa51e1bd95281744e53c8199e7f745044f735124aef567ec00da28fbeb"
   },
-  "tools/lifter/sym.py": {
-    "bytes": 1914,
-    "sha256": "40ef277ce280ce14313f95e4032c6b1e5085e0ad11292000061eef8b66e19557"
-  },
-  "tools/lifter/test_lift.py": {
-    "bytes": 10032,
-    "sha256": "28a8c0d9dacf531312ba2d9990ceed9aa082655adfe9e99fac27439d3cadc6d0"
-  },
-  "tools/lifter/test_simd.py": {
-    "bytes": 19433,
-    "sha256": "d4d257cc2b126fcca7a1dc22fa4e562db9bac74251b30e2e6ebbe3a7786125e2"
-  },
-  "tools/make_portable.py": {
-    "bytes": 15409,
-    "sha256": "a260d1a58dc34904c738849514dad31bcfda4e6f887e73446a9bcbdeee5987eb"
-  },
-  "tools/merge_variants.py": {
-    "bytes": 1457,
-    "sha256": "a460078a962117110db6b91fc3f78c56f0fcdd188584e3c42bb35d6b8f8fb038"
-  },
-  "tools/package_guard.py": {
-    "bytes": 3684,
-    "sha256": "4352ab57d649728e1f5264cb0eea268328b934d599ca516d75e72592fd286a0a"
-  },
-  "tools/performance_report.py": {
-    "bytes": 3913,
-    "sha256": "6f1c8b7333ca2955448bd18691d11849dd6ce74d35aca5b3f8c0db5a241aa024"
-  },
-  "tools/ref_compare.py": {
-    "bytes": 5324,
-    "sha256": "3e8b68c4c4333e4b58544a7133a466c8ac57543e06473799c84fa89e322a393f"
-  },
-  "tools/report.py": {
-    "bytes": 4067,
-    "sha256": "5c0732a8b7da0957ac0fd0909fe590de9f1b8e0107ed4cae188e551b80a82175"
-  },
   "tools/setup_game_files.ps1": {
     "bytes": 3947,
     "sha256": "e5379c21fa36cfc0e593ba04357f96bd882fc55e92fcbc97a77fc6bf1cde618f"
   },
-  "tools/setup_validation.py": {
-    "bytes": 1999,
-    "sha256": "69ae130c769fad077b97079acd9033fb727e12fcb760051129906db85dfa9e8b"
-  },
   "tools/setup_windows.ps1": {
     "bytes": 2045,
     "sha256": "3f3caac2887061bc9c811e8c3e054b4b1904420c4d87bbea829f04eb6f9241f7"
-  },
-  "tools/shot_sheet.py": {
-    "bytes": 609,
-    "sha256": "5d1e6edbb300680a5ade467b55c4e9fa6e8322efa6eab173b789bdd3ccfea9e4"
-  },
-  "tools/soak.py": {
-    "bytes": 3037,
-    "sha256": "2181f734c93ddf7a2dc415afe36358cdac1cd20d83e0ca2719a8a9843bd72379"
-  },
-  "tools/soak_report.py": {
-    "bytes": 2259,
-    "sha256": "d947911753820197f340a465098eff2ad42c115e980d86312f948b624dae8fa3"
-  },
-  "tools/spch_attrs.py": {
-    "bytes": 3823,
-    "sha256": "676fa0545e17362d719d50e316f129fd80f9b0d6becd3e70900351b03e334fc1"
-  },
-  "tools/tests/test_harness.c": {
-    "bytes": 2824,
-    "sha256": "1a37992e3646b1c33eeeb2c08b208f887e59a9313786357f03f4c6d5b74c925a"
-  },
-  "tools/timed_route.py": {
-    "bytes": 1447,
-    "sha256": "d6228aff03e69c8a68b3bb27b3885f4c7bfe118295ff8f39b8e39b13a186e36b"
-  },
-  "tools/tour_batch.py": {
-    "bytes": 6793,
-    "sha256": "0af5675ff6f83953050fad2130e2206413e7b14787325fbb427703f5f091692f"
-  },
-  "tools/tour_gen.py": {
-    "bytes": 7137,
-    "sha256": "6e32c41f869029bf7c5ea8d2eaa53b84a8d96640874a3385fb96e3265bafa099"
-  },
-  "tools/validate_port.py": {
-    "bytes": 8610,
-    "sha256": "14dd814d94e8b46fe4064c4449e8159b392bbc8915d69f4da72f023253f529de"
-  },
-  "tools/video_flicker.py": {
-    "bytes": 1435,
-    "sha256": "8e9d33cc670fe4c2d7956d469ab4d456b0f2e721d4653fee3070a0a2f9c35551"
-  },
-  "tools/vulkan_smoke.h": {
-    "bytes": 10509,
-    "sha256": "425fd8794eaaa9fe159823fbf2580834377995ebb9f2a041b6e2c9f67136693f"
-  },
-  "tools/wav_compare.py": {
-    "bytes": 3765,
-    "sha256": "256dd005a74cfa1bffbbedf88b89c081c9e64f80bad85f473e6a405e30bbd4ae"
-  },
-  "tools/wav_report.py": {
-    "bytes": 2078,
-    "sha256": "f1d5b04a7bf449c648da89950cda19185cea1c059fd3d5fc2397d323578e15f9"
   }
 }

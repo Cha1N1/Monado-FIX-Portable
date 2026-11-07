@@ -90,6 +90,8 @@ static bool use_dlss(void) {
 
 // ---------------------------------------------------------------- jitter
 static uint32_t jit_index, jit_phases = 8;
+static bool aspect_reset;
+void tmp_reset_history(void) { aspect_reset = true; jit_index = 0; }
 static float halton(uint32_t i, uint32_t b) {
     float f = 1, r = 0;
     for (; i; i /= b) { f /= (float)b; r += f * (float)(i % b); }
@@ -514,7 +516,11 @@ VkImageView tmp_upscale(VkCommandBuffer cb, TexBackend *color, VkImageView color
     if (jit_phases < 8) jit_phases = 8;
     // T252: resized scene/output and upscaler changes invalidate history before reprojection.
     bool size_changed = rw != prev_rw || rh != prev_rh || ow != prev_ow || oh != prev_oh || prev_upscaler != g_settings.upscaler || prev_quality != g_settings.upscale_quality;
-    if (size_changed) { prev.ok = false; last_jit[0] = last_jit[1] = 0; }
+    if (size_changed || aspect_reset) {
+        prev.ok = false;
+        last_jit[0] = last_jit[1] = 0;
+        aspect_reset = false;
+    }
     prev_rw = rw; prev_rh = rh; prev_ow = ow; prev_oh = oh; prev_upscaler = g_settings.upscaler;
     prev_quality = g_settings.upscale_quality;
     // previous view-projection x inverse(current): this frame's NDC -> the previous frame's clip position

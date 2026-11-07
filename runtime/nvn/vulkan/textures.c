@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "vk.h"
@@ -1297,7 +1298,21 @@ VkImageView vk_dummy_view(int textype) {
     VK_CHECK(vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL));
     VkCommandBuffer cb = vk_upload_cmd();
     vk_image_init_layout(cb, b->image, VK_IMAGE_ASPECT_COLOR_BIT);
+    // [FIX-TEX] XCDE_DUMMY_COLOR: color of the substitute texture (empty / incompatible slots). Default 0,0,0,0 (as before).
+    //   white = 1,1,1,1 | mid = 0.5,0.5,0.5,1 | opaque = 0,0,0,1 | or "r,g,b,a" (0..1)
     VkClearColorValue zero = {{0, 0, 0, 0}};
+    {
+        const char *dc = getenv("XCDE_DUMMY_COLOR");
+        if (dc && *dc) {
+            float c[4] = {0, 0, 0, 0};
+            if (!strcmp(dc, "white")) c[0] = c[1] = c[2] = c[3] = 1;
+            else if (!strcmp(dc, "mid")) { c[0] = c[1] = c[2] = 0.5f; c[3] = 1; }
+            else if (!strcmp(dc, "opaque")) c[3] = 1;
+            else sscanf(dc, "%f,%f,%f,%f", &c[0], &c[1], &c[2], &c[3]);
+            for (int k = 0; k < 4; k++) zero.float32[k] = c[k];
+            static int told; if (!told++) LOG("[vk] XCDE_DUMMY_COLOR: substitute texture %.2f,%.2f,%.2f,%.2f%c", c[0], c[1], c[2], c[3], 10);
+        }
+    }
     VkImageSubresourceRange all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, cube ? 6 : 1};
     vk_watch(b->image, "textures.c:823 vkCmdClearColorImage"); vkCmdClearColorImage(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &all);
     b->format = VK_FORMAT_R8G8B8A8_UNORM;

@@ -31,7 +31,7 @@ extern "C" {
 #define DLOG(...) fprintf(stderr, __VA_ARGS__)
 
 static HMODULE sl_mod;
-static bool sl_ok, dlss_ok, sl_initialized;
+static bool sl_ok, dlss_ok, sl_initialized, sl_surface_ready;
 static char dlss_note[256] = "No inicializado; se comprueba al iniciar";
 static VkDevice sl_device;
 static PFN_vkGetInstanceProcAddr p_proxyInstanceProcAddr;
@@ -40,7 +40,7 @@ extern "C" const char *dlss_status(void) { return dlss_note; }
 static void dlss_note_set(const char *text) { snprintf(dlss_note, sizeof dlss_note, "%s", text); DLOG("[dlss] %s\n", text); }
 static void dlss_shutdown(void) {
     if (sl_initialized && p_slShutdown) { if (sl_device) vkDeviceWaitIdle(sl_device); p_slShutdown(); }
-    sl_initialized = sl_ok = dlss_ok = false;
+    sl_initialized = sl_ok = dlss_ok = sl_surface_ready = false;
 }
 static PFun_slInit *p_slInit;
 static PFun_slGetFeatureRequirements *p_slGetFeatureRequirements;
@@ -229,32 +229,51 @@ extern "C" void dlss_device_created(VkInstance inst, VkPhysicalDevice phys, VkDe
     }
     p_slDLSSSetOptions = (PFun_slDLSSSetOptions *)f;
     dlss_ok = true;
-    dlss_note_set("DLSS Super Resolution disponible en la GPU activa");
-    DLOG("[dlss] DLSS Super Resolution ready\n");
 }
 
-// T257: surface creation is also a mandatory Streamline Vulkan hook.
-extern "C" bool dlss_create_surface(void *sdl_window, VkInstance instance, VkSurfaceKHR *surface) {
-    if (!sl_ok || !p_proxyInstanceProcAddr) return false;
+// T263: Streamline's surface wrapper uses the instance dispatch set up by slSetVulkanInfo.
+extern "C" bool dlss_create_surface(void *sdl_window, VkInstance instance, VkPhysicalDevice phys,
+                                    uint32_t qfam, VkSurfaceKHR *surface) {
+    if (!dlss_ok || !p_proxyInstanceProcAddr) return false;
     auto create = (PFN_vkCreateWin32SurfaceKHR)p_proxyInstanceProcAddr(instance, "vkCreateWin32SurfaceKHR");
+    auto destroy = (PFN_vkDestroySurfaceKHR)p_proxyInstanceProcAddr(instance, "vkDestroySurfaceKHR");
     HWND hwnd = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties((SDL_Window *)sdl_window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
-    if (!create || !hwnd) { sl_ok = false; dlss_note_set("No se pudo preparar la superficie DLSS"); return false; }
+    if (!create || !destroy || !hwnd) {
+        dlss_note_set("Falta el hook o la ventana para preparar la superficie DLSS");
+        return false;
+    }
     VkWin32SurfaceCreateInfoKHR info{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
     info.hinstance = (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE);
     if (!info.hinstance) info.hinstance = GetModuleHandleW(nullptr);
     info.hwnd = hwnd;
-    VkResult r = create(instance, &info, nullptr, surface);
-    if (r != VK_SUCCESS) { sl_ok = false; dlss_note_set("La superficie DLSS falló; se usa Vulkan sin DLSS"); return false; }
+    VkSurfaceKHR hooked = VK_NULL_HANDLE;
+    VkResult r = create(instance, &info, nullptr, &hooked);
+    if (r != VK_SUCCESS || !hooked) {
+        snprintf(dlss_note, sizeof dlss_note, "Falló la superficie Streamline (Vulkan %d)", (int)r);
+        DLOG("[dlss] %s\n", dlss_note);
+        return false;
+    }
+    VkBool32 present = VK_FALSE;
+    r = vkGetPhysicalDeviceSurfaceSupportKHR(phys, qfam, hooked, &present);
+    if (r != VK_SUCCESS || !present) {
+        destroy(instance, hooked, nullptr);
+        snprintf(dlss_note, sizeof dlss_note, "La cola no puede presentar la superficie Streamline (Vulkan %d)", (int)r);
+        DLOG("[dlss] %s\n", dlss_note);
+        return false;
+    }
+    *surface = hooked;
+    sl_surface_ready = true;
+    dlss_note_set("DLSS Super Resolution disponible en la GPU activa");
     return true;
 }
 
 // Streamline's proxies for the swapchain calls it intercepts (NULL: call Vulkan directly).
 extern "C" PFN_vkVoidFunction dlss_proxy(VkDevice dev, const char *name) {
-    if (!sl_ok || !p_proxyDeviceProcAddr) return nullptr;
+    if (!sl_surface_ready || !p_proxyDeviceProcAddr) return nullptr;
     return p_proxyDeviceProcAddr(dev, name);
 }
 
-extern "C" bool dlss_available(void) { return dlss_ok; }
+extern "C" bool dlss_available(void) { return dlss_ok && sl_surface_ready; }
 
 static sl::Resource tex(const TexBackend *b, VkImageUsageFlags usage) {
     static const VkComponentMapping id = {};

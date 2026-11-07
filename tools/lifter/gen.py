@@ -20,6 +20,7 @@ from unicorn import arm64_const as A
 from analyze import eh_frame_functions
 from lifter import Insn, Lifter, Unsupported, bits, emit_asm_batch, hx, sext
 from nso import Nso, R_AARCH64_RELATIVE
+from patchfmt import JumpTable
 
 SCRATCH_MEM = 0x7300000000
 
@@ -320,10 +321,12 @@ class Module:
                 if self.in_text(ins.target):
                     ext.add(ins.target)
             elif ins.kind == 'br':
-                jt = self.jump_table(a, entry, end)
+                patch = PATCHES.get(a)
+                jt = patch.resolve(self, a) if isinstance(patch, JumpTable) else self.jump_table(a, entry, end)
                 if jt:
                     tables[a] = jt
-                    labels.update(jt)
+                    labels.update(t for t in jt if entry <= t < end)
+                    ext.update(t for t in jt if not entry <= t < end)
                     self.stats['jumptables'] += 1
                 elif self.computed_target(a, entry):
                     # unresolved table jump: allow jumping to any instruction of the function
@@ -420,7 +423,7 @@ class Module:
                 out.append('    else { ' + ' '.join(self.render_single(ins, a, jump, refs)) + ' } }')
                 last = 'op'
                 continue
-            if a in PATCHES:  # hand-written replacement for one instruction (tools/patches.py)
+            if a in PATCHES and not isinstance(PATCHES[a], JumpTable):
                 flush()
                 out.append('    ' + PATCHES[a].apply(self, a))
                 last = 'op'
@@ -460,7 +463,7 @@ class Module:
                     out.append(f'    c->pc = {ins.target}; goto L_dispatch;')
                     continue
                 if jt:
-                    cases = ' '.join(f'case {hx(t)}: goto L_{t:x};' for t in jt)
+                    cases = ' '.join(f'case {hx(t)}: {jump(t)}' for t in jt)
                     out.append(f'    switch ({ins.target}) {{ {cases} default: break; }}')
                     if all_labels:
                         out.append(f'    c->pc = {ins.target}; goto L_dispatch;')
@@ -544,6 +547,9 @@ def main():
     import patchfmt  # [XCDE]
     PATCHES.update(patchfmt.load_patches(args.patches))
     m = Module(args.name, args.nso, args.base, args.simd)
+    for addr, patch in PATCHES.items():
+        if isinstance(patch, JumpTable) and m.in_text(addr):
+            patch.resolve(m, addr)
     starts = m.boundaries()
     hle = {}
     if args.hle and os.path.exists(args.hle):
