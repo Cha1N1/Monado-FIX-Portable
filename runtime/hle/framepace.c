@@ -664,6 +664,22 @@ static void fvalfind(void) {
 #endif
 }
 
+static void ui_speed_fix(void) {
+    static float ref, last;
+    static int have;
+    uint64_t pp = *(volatile uint64_t *)(uintptr_t)0x7000b8a278ull;
+    if (!pp) return;
+    uint64_t go = *(volatile uint64_t *)(uintptr_t)pp;
+    if (!go) return;
+    volatile float *f = (volatile float *)(uintptr_t)(go + 0x70);
+    int fps = xcde_present_fps();
+    float k = fps > 0 ? 30.0f / (float)fps : 1.0f;
+    float cur = *f;
+    if (!have || cur != last) { ref = cur; have = 1; }
+    last = ref * k;
+    *f = last;
+}
+
 void xcde_limiter_done(void) {
     xcde_frame_clock_step(&xcde_clock, xcde_frame_now_ns());
     fvalfind();
@@ -674,6 +690,7 @@ void xcde_limiter_done(void) {
     statesnap();
     deltafind();
     fps_interval_force();
+    ui_speed_fix();
     static int on = -1;
     if (on < 0) { const char *e = ENV("XCDE_LIMITER_SLEEP"); on = (!e || atoi(e) != 0) && !diag_deterministic(); }
     if (!on) return;
