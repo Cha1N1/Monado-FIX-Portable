@@ -11,6 +11,7 @@
 //   XCDE_TMP_DEBUG=1  the upscaler's debug view (FSR: motion vectors, depth, reactiveness...)
 //   XCDE_TMP_LOG=1    a line a second: camera found, sizes, jitter
 #include <SDL3/SDL_timer.h>
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -98,9 +99,40 @@ static float halton(uint32_t i, uint32_t b) {
     return r;
 }
 void tmp_jitter(float j[2]) {
+    static int decide = -1;  // 1 = produce a Halton jitter, 0 = images are drawn unjittered
+    if (decide < 0) {
+        const char *e = getenv("XCDE_TMP_NOJITTER");
+        // [XCDE][FSR3] GitHub #14, all GPUs (user's machine: Ryzen 5 Pro 5650U, Vega iGPU): with our Halton jitter the
+        // FSR 3 / DLSS accumulation flickers the whole image and none of the declared-jitterOffset sign flips helped
+        // (XCDE_TMP_JIT_SIGN 1/2/3: every one of them brought the flicker back), while both at zero are steady
+        // (XCDE_TMP_NOJITTER=1, the diagnostics bat's option 11) - and it also took the right-edge vertical line with
+        // it. The scene never cancels the declared offset underneath us (romfs_virtual.c: the game's own TAA is off
+        // for FSR 3/DLSS), so the mismatch is in what the upscaler undoes vs what the draws did; until that
+        // convention is found, no jitter is the only stable configuration. The AntiAliasing cost is a little more
+        // edge aliasing; XCDE_TMP_JIT_FORCE=1 brings the Halton jitter back on any GPU to compare.
+        (void)e;
+        decide = env_int("XCDE_TMP_JIT_FORCE") != 0;
+    }
+    if (!decide) { j[0] = j[1] = 0; return; }
     jit_index = jit_index % jit_phases + 1;
     j[0] = halton(jit_index, 2) - 0.5f;
     j[1] = halton(jit_index, 3) - 0.5f;
+}
+
+// [XCDE][FSR3] GitHub #14: XCDE_TMP_NOJITTER proved the whole-image trembling is our jitter not matching what the
+// upscaler undoes (option 11: both at 0 = image steady). AMD's own sample defines the contract as
+//   jitterX = +2*j/width, jitterY = -2*j/height   (docs/techniques: "Calculate the jittered projection matrix")
+// i.e. a positive jitterOffset.y is supposed to shift the image DOWN on screen in the D3D (NDC y up) world the
+// sample was written for. Our draws move the Vulkan viewport (framebuffer y downward): the mapping of positive Y is
+// the opposite of NDC y up. XCDE_TMP_JIT_SIGN picks what we declare (and never what the draws do):
+//   1 = negate Y (the expected fix)   2 = negate X   3 = negate both   0/absent = as today
+static void jit_upscale_out(const float jit[2], float out[2]) {
+    out[0] = jit[0]; out[1] = jit[1];
+    switch (env_int("XCDE_TMP_JIT_SIGN")) {
+    case 1: out[1] = -out[1]; break;
+    case 2: out[0] = -out[0]; break;
+    case 3: out[0] = -out[0]; out[1] = -out[1]; break;
+    }
 }
 
 // ---------------------------------------------------------------- images
@@ -399,7 +431,8 @@ static bool fsr_context(uint32_t ow, uint32_t oh) {
                                              .flags = FFX_UPSCALE_ENABLE_DEPTH_INFINITE | FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE |
                                                       FFX_UPSCALE_ENABLE_DYNAMIC_RESOLUTION,
                                              .maxRenderSize = {ow, oh}, .maxUpscaleSize = {ow, oh}, .fpMessage = fsr_message};
-    if (env_int("XCDE_TMP_DEBUG")) cd.flags |= FFX_UPSCALE_ENABLE_DEBUG_CHECKING;
+    // [XCDE] T260: XCDE_TMP_CHECK=1: FSR 3 validates its inputs and says what is wrong in the log ([tmp] FSR warning/error), no overlay
+    if (env_int("XCDE_TMP_DEBUG") || env_int("XCDE_TMP_CHECK")) cd.flags |= FFX_UPSCALE_ENABLE_DEBUG_CHECKING;
     ffxReturnCode_t r = ffx_create(&fsr_ctx, &cd.header, NULL);
     if (r != FFX_API_RETURN_OK) { LOG("[tmp] FSR 3 context failed: %u\n", r); fsr_ctx = NULL; ffx_state = -1; return false; }
     fsr_w = ow; fsr_h = oh;
@@ -501,6 +534,24 @@ static void mv_shot(VkCommandBuffer cb, uint32_t rw, uint32_t rh, const double r
     pend_frame = f;
 }
 
+// [XCDE] T260: FSR / DLSS ask for a negative texture LOD bias of about -log2(output / render size) while the scene is
+// rendered below the output size (the game's textures stay sharp for the upscaler; without it they look soft and shimmer,
+// more the lower the render size). Added to the game's own bias in textures.c vk_sampler (samplers are created once: change
+// the upscale quality, then restart). XCDE_TMP_LOD_BIAS=<value> sets it by hand (0 = off).
+float tmp_lod_bias(void) {
+    static float forced = 1e9f;
+    if (forced == 1e9f) { const char *e = getenv("XCDE_TMP_LOD_BIAS"); forced = e && *e ? (float)atof(e) : 1e8f; }
+    if (forced != 1e8f) return forced;
+    if (!tmp_enabled()) return 0;
+    switch (g_settings.upscale_quality) {
+    case UQ_QUALITY: return -0.585f;   // 1.5x
+    case UQ_BALANCED: return -0.766f;  // 1.7x
+    case UQ_PERFORMANCE: return -1.0f; // 2x
+    case UQ_ULTRA: return -1.585f;     // 3x
+    default: return 0;
+    }
+}
+
 VkImageView tmp_upscale(VkCommandBuffer cb, TexBackend *color, VkImageView color_view, TexBackend *depth, const TmpCamera *cam,
                         const float jitter[2], bool dm1, uint32_t ow, uint32_t oh) {
     static TmpCamera prev;
@@ -532,9 +583,31 @@ VkImageView tmp_upscale(VkCommandBuffer cb, TexBackend *color, VkImageView color
     // a cut (camera jumped): no history
     bool reset = !prev.ok;
     if (prev.ok) {
+        // [XCDE] T260: the old test summed |view - prev view| over all 12 numbers, translation column included. That column is
+        // -R * (camera position): the farther the camera is from the world origin, the more a SMALL turn changes it (1000 units
+        // away, 0.1 degree = 1.7), so turning the camera in some places reset the temporal history on about one frame in
+        // five (the log of the user's report) and the upscaler showed a raw low-resolution frame: flicker, worse the lower
+        // the render size. Now: the rotation alone (~30 degrees) or the camera's WORLD position jumping (a cut / teleport).
+        // XCDE_TMP_OLD_RESET=1: the old test.
         double d = 0;
-        for (int i = 0; i < 12; i++) d += fabs((double)cam->view[i] - prev.view[i]);
-        if (d > 1.5) reset = true;  // (a rotation of ~30 degrees or a big translation in one frame)
+        if (env_int("XCDE_TMP_OLD_RESET")) {
+            for (int i = 0; i < 12; i++) d += fabs((double)cam->view[i] - prev.view[i]);
+            if (d > 1.5) reset = true;
+        } else {
+            double pc[3] = {0, 0, 0}, pp[3] = {0, 0, 0};
+            for (int r = 0; r < 3; r++)
+                for (int k = 0; k < 3; k++) {
+                    d += fabs((double)cam->view[r * 4 + k] - prev.view[r * 4 + k]);
+                    pc[k] -= (double)cam->view[r * 4 + k] * cam->view[r * 4 + 3];
+                    pp[k] -= (double)prev.view[r * 4 + k] * prev.view[r * 4 + 3];
+                }
+            double dist = sqrt((pc[0] - pp[0]) * (pc[0] - pp[0]) + (pc[1] - pp[1]) * (pc[1] - pp[1]) + (pc[2] - pp[2]) * (pc[2] - pp[2]));
+            if (d > 1.5 || dist > 8.0) {
+                reset = true;
+                static int nl;
+                if (env_int("XCDE_TMP_LOG") && nl++ < 40) LOG("[tmp] history reset: rotation %.2f, camera moved %.1f\n", d, dist);
+            }
+        }
     }
     img_make(&img[0], F_COLOR, rw, rh, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
     img_make(&img[1], F_MV, rw, rh, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
@@ -572,13 +645,19 @@ VkImageView tmp_upscale(VkCommandBuffer cb, TexBackend *color, VkImageView color
     mv_shot(cb, rw, rh, reproj, have_prev);  // [XCDE] T228 (research)
     uint64_t now = SDL_GetTicksNS();
     float dt = t_last ? (float)((now - t_last) / 1e6) : 16.7f;
+    if (!(dt >= 1.0f)) dt = 1.0f;      // [XCDE] T260: FSR 3 uses the frame time (ms): a loading hitch of seconds or a 0 broke its accumulation
+    if (dt > 100.0f) dt = 100.0f;
     t_last = now;
     bool ok = false;
+    float jit_out[2];  // what the upscalers are told (the draws keep the raw jitter; XCDE_TMP_JIT_SIGN)
+    jit_upscale_out(jitter, jit_out);
     if (use_dlss()) {
         extern bool dlss_evaluate(VkCommandBuffer cb, const TexBackend *color, const TexBackend *mv, const TexBackend *depth,
                                   const TexBackend *out, const TexBackend *hud, const float jitter[2], bool reset, const TmpCamera *cam,
                                   const double reproj[16]);
-        ok = dlss_evaluate(cb, &img[0].b, &img[1].b, &img[2].b, &img[3].b, NULL, jitter, reset, cam, reproj);
+        // [XCDE] T260: img[5] = the reactive mask (moving pixels, see tmp_prep.frag): DLSS's "bias current colour" hint
+        ok = dlss_evaluate(cb, &img[0].b, &img[1].b, &img[2].b, &img[3].b, env_int("XCDE_TMP_NO_REACTIVE") ? NULL : &img[5].b, jit_out, reset,
+                           cam, reproj);
     } else if (ffx_load() && fsr_context(ow, oh)) {
         struct ffxDispatchDescUpscale d;
         memset(&d, 0, sizeof d);
@@ -588,9 +667,11 @@ VkImageView tmp_upscale(VkCommandBuffer cb, TexBackend *color, VkImageView color
         d.motionVectors = res(&img[1], FFX_API_SURFACE_FORMAT_R16G16_FLOAT, FFX_API_RESOURCE_USAGE_READ_ONLY);
         d.depth = res(&img[2], FFX_API_SURFACE_FORMAT_R32_FLOAT, FFX_API_RESOURCE_USAGE_READ_ONLY);
         d.output = res(&img[3], FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM, FFX_API_RESOURCE_USAGE_UAV);
+        // [XCDE] T260: the reactive mask (tmp_prep.frag oHud; before T260 it was computed but never handed over)
+        if (!env_int("XCDE_TMP_NO_REACTIVE")) d.reactive = res(&img[5], FFX_API_SURFACE_FORMAT_R8_UNORM, FFX_API_RESOURCE_USAGE_READ_ONLY);
 
-        d.jitterOffset.x = jitter[0];
-        d.jitterOffset.y = jitter[1];
+        d.jitterOffset.x = jit_out[0];
+        d.jitterOffset.y = jit_out[1];
         d.motionVectorScale.x = (float)rw;
         d.motionVectorScale.y = (float)rh;
         d.renderSize.width = rw; d.renderSize.height = rh;
@@ -602,7 +683,7 @@ VkImageView tmp_upscale(VkCommandBuffer cb, TexBackend *color, VkImageView color
         d.reset = reset;
         float p11 = cam->proj[5];
         d.cameraNear = cam->proj[11] != 0 ? fabsf(cam->proj[11]) * 0.5f : 0.1f;  // (GL infinite projection: row 2 w = -2 near)
-        d.cameraFar = 1e6f;
+        d.cameraFar = FLT_MAX;  // [XCDE] T260: with DEPTH_INFINITE FSR 3.1 requires FLT_MAX (its own warning, 2500x per session in the log)
         d.cameraFovAngleVertical = p11 != 0 ? 2.0f * atanf(1.0f / fabsf(p11)) : 0.785f;
         d.viewSpaceToMetersFactor = 1.0f;
         d.flags = FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB | (env_int("XCDE_TMP_DEBUG") ? FFX_UPSCALE_FLAG_DRAW_DEBUG_VIEW : 0);
@@ -611,10 +692,10 @@ VkImageView tmp_upscale(VkCommandBuffer cb, TexBackend *color, VkImageView color
         if (!ok) { static int n; if (n++ < 5) LOG("[tmp] FSR dispatch failed: %u\n", r); }
     }
     vk_full_barrier(cb);
-    fg_frame(cb, ok, cam, jitter, rw, rh, dt, reset);
+    fg_frame(cb, ok, cam, jit_out, rw, rh, dt, reset);
     if (env_int("XCDE_TMP_LOG") && (frames++ % 60) == 0)
-        LOG("[tmp] %ux%u -> %ux%u jitter %.3f %.3f (%u phases) %s%s near %.3f fov %.1f proj11 %.3f\n", rw, rh, ow, oh, jitter[0],
-            jitter[1], jit_phases, reset ? "reset " : "", ok ? "ok" : "FAILED", cam->proj[11] * 0.5, 2 * atan(1.0 / cam->proj[5]) * 57.2958,
+        LOG("[tmp] %ux%u -> %ux%u jitter %.3f %.3f (%u phases) %s%s near %.3f fov %.1f proj11 %.3f\n", rw, rh, ow, oh, jit_out[0],
+            jit_out[1], jit_phases, reset ? "reset " : "", ok ? "ok" : "FAILED", cam->proj[11] * 0.5, 2 * atan(1.0 / cam->proj[5]) * 57.2958,
             cam->proj[5]);
     last_jit[0] = jitter[0]; last_jit[1] = jitter[1];
     prev = *cam;
