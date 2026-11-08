@@ -344,7 +344,26 @@ static uint64_t stat_occ_reports, stat_occ_hidden;
 
 static bool oq_enabled(void) {
     static int on = -1;
-    if (on < 0) { const char *e = getenv("XCDE_OCCLUSION"); on = !diag_deterministic() && !(e && atoi(e) == 0); }
+    if (on < 0) {
+        const char *e = getenv("XCDE_OCCLUSION");
+        if (g_settings.occlusion == OCCL_ON) on = true;
+        else if (g_settings.occlusion == OCCL_OFF) on = false;  // the manifest toggle (xcde.ini / the GPU menu) wins
+        else if (e && *e) {
+            on = atoi(e) != 0;  // (diagnostics: XCDE_OCCLUSION only speaks when the toggle is on Automatic)
+        } else if (diag_deterministic()) {
+            on = false;  // (T029: GPU results must not steer the game; captures stay comparable)
+        } else {
+            // [XCDE][FSR3] GitHub #14 (user's Ryzen 5 Pro 5650U, Vega iGPU): the visibility counters (this file, T139)
+            // resolve late on a slow GPU while FSR 3 lengthens the frame: the game reads the counter before our
+            // resolve lands or with an unlucky partial result and culls large ground chunks for a while ("the floor
+            // disappears and comes back", all resolutions, not on dedicated GPUs; measured with the FSR3-diagnostics
+            // bat: FSR 3 OFF = fine, occlusion OFF = fine, FSR 3 ON with occlusion OFF = fine). Automatic (the
+            // default): occlusion culling stays ON on dedicated GPUs; an AMD integrated card starts with it off,
+            // overridable there from the GPU/Vulkan menu or xcde.ini occlusion = on/off.
+            on = !(g_vk.props.vendorID == 0x1002 && g_vk.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU);
+            if (!on) LOG("[occlusion] AMD integrated GPU: sample counters off (the floor-vanishing class of bug; the GPU/Vulkan menu turns it back on)\n");
+        }
+    }
     return on;
 }
 

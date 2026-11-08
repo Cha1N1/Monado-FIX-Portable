@@ -27,6 +27,7 @@ enum { LANG_AUTO = 0, N_LANGUAGES = 14 };
 // Vulkan device policy: automatic chooses the best usable adapter; compatibility disables optional fast paths.
 enum { GPU_PROFILE_AUTO = 0, GPU_PROFILE_COMPATIBILITY = 1 };
 enum { GPU_GPL_AUTO = -1, GPU_GPL_OFF = 0, GPU_GPL_ON = 1 };
+enum { OCCL_AUTO = -1, OCCL_OFF = 0, OCCL_ON = 1 };  // [XCDE] occlusion-culling override (see oq_enabled, exec.c)
 extern const char *const g_language_codes[N_LANGUAGES];  // what the game is told: "ja", "en-US", "es", ...
 extern const char *const g_language_names[N_LANGUAGES];  // for the menu ("Auto", "Japanese", ..., "Spanish")
 
@@ -87,6 +88,7 @@ typedef struct {
     bool gpu_keep_heavy; // restore the three expensive AMD volume-effect shaders (restart)
     int gpu_profile;     // GPU_PROFILE_*; compatibility disables optional pipeline-library, host-import and frame-generation paths
     int gpu_gpl;         // GPU_GPL_*; explicit graphics-pipeline-library override, restart required
+    int occlusion;       // OCCL_*; occlusion-culling override (restart): auto = off on AMD iGPUs, GitHub #14
     bool gpu_memory_budget; // use VK_EXT_memory_budget when exposed; informational allocator support
     bool taa_off;        // [XCDE] remove only the game's temporal AA (lib_nx.ini tmaa): xcde.ini taa = 0 (default 1: kept)
 } Settings;

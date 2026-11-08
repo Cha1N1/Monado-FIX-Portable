@@ -329,6 +329,12 @@ static void ui(void) {
             int gpl = g_settings.gpu_gpl == GPU_GPL_OFF ? 1 : g_settings.gpu_gpl == GPU_GPL_ON ? 2 : 0;
             if (monado_combo(T("Bibliotecas de pipelines"), &gpl, TL(gpl_modes, 3).p, 3))
                 g_settings.gpu_gpl = gpl == 1 ? GPU_GPL_OFF : gpl == 2 ? GPU_GPL_ON : GPU_GPL_AUTO;
+            // [XCDE][FSR3] GitHub #14: occlusion culling misresolves on AMD integrated GPUs (the floor-vanishing
+            // class of bug, oq_enabled in exec.c); automatic = off there, on elsewhere, overridable from here.
+            static const char *occl_modes[] = {"Automático (AMD integrada: apagada)", "Desactivada", "Activada"};
+            int occl = g_settings.occlusion == OCCL_OFF ? 1 : g_settings.occlusion == OCCL_ON ? 2 : 0;
+            if (monado_combo(T("Culling por oclusión (al reiniciar)"), &occl, TL(occl_modes, 3).p, 3))
+                g_settings.occlusion = occl == 1 ? OCCL_OFF : occl == 2 ? OCCL_ON : OCCL_AUTO;
             ImGui::Checkbox(T("Presupuesto de memoria Vulkan"), &g_settings.gpu_memory_budget);
             ImGui::TextDisabled(T("Estos cambios requieren reiniciar el juego."));
             ImGui::EndTabItem();
