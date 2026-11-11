@@ -102,7 +102,7 @@
 | `nn::hid::GetNpadStyleSet` | runtime/hle/input.c | unreviewed |  |
 | `nn::hid::GetVibrationDeviceInfo` | runtime/hle/input.c | unreviewed |  |
 | `nn::hid::GetVibrationDeviceHandles` | runtime/hle/input.c | unreviewed |  |
-| `nn::hid::InitializeVibrationDevice` | runtime/hle/input.c | stub | (automatic: the body does nothing) |
+| `nn::hid::InitializeVibrationDevice` | runtime/hle/input.c | unreviewed |  |
 | `nn::hid::BindNpadStyleSetUpdateEvent` | runtime/hle/input.c | unreviewed |  |
 | `nn::mem::StandardAllocator::Initialize` | runtime/hle/heaps.c | unreviewed |  |
 | `nn::mem::StandardAllocator::Initialize` | runtime/hle/heaps.c | unreviewed |  |
@@ -175,4 +175,4 @@ the runtime does not implement (in normal mode they return success; with `XCDE_S
 |---|---|---|---|---|
 | svc | 9 | 4 | 3 | 27 |
 | service | 3 | 4 | 6 | 8 |
-| func | 0 | 0 | 14 | 55 |
+| func | 0 | 0 | 13 | 56 |

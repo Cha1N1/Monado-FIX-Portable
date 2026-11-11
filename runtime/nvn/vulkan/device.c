@@ -179,6 +179,31 @@ static void pick_device(void) {
         (double)local_bytes / (1024.0 * 1024.0), (double)shared_bytes / (1024.0 * 1024.0),
         g_vk.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? " (integrated/shared-memory class)" : "");
     LOG("[vk] using graphics+compute+present queue family %u\n", g_vk.qfam);
+    // [XCDE] issue #7: one line, only when the automatic amd_fix will actually engage (RDNA 3); other GPUs
+    // must see no new log output (GitHub #7 acceptance criteria).
+    if (vk_amd_rdna3())
+        LOG("[vk] AMD RDNA 3: yes (device 0x%04x, %s)\n", g_vk.props.deviceID,
+            g_vk.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? "integrated" : "discrete");
+}
+
+// [XCDE] issue #7: the glitch is confirmed on RDNA 3 dedicated cards (RX 7800 XT, Navi 32)
+// and on RDNA 3 integrated GPUs (Ryzen 5 8600G, Phoenix1). Device IDs from pci.ids
+// 2026.11.09. Keep this list explicit: Navi 24 (0x743F, RDNA 2) is adjacent to Navi 33.
+bool vk_amd_rdna3(void) {
+    if (g_vk.props.vendorID != 0x1002) return false;
+    switch (g_vk.props.deviceID & 0xFFFF) {
+    // ---- Navi 31 (RX 7900 XTX/XT/GRE/7900M, Pro W7900/W7800) ----
+    case 0x7448: case 0x7449: case 0x744A: case 0x744B: case 0x744C: case 0x745E:
+    // ---- Navi 32 (RX 7800 XT / 7700 XT, Pro W7700, PRO V710) ----
+    case 0x7460: case 0x7461: case 0x7470: case 0x747E:
+    // ---- Navi 33 (RX 7600/7600 XT/7500/7400/7300, 7600M/7700S, Pro W7500/W7600) ----
+    case 0x73F0: case 0x7480: case 0x7481: case 0x7483: case 0x7487:
+    case 0x7489: case 0x748B: case 0x7499: case 0x749F:
+    // ---- RDNA 3 iGPU: Phoenix1 / Phoenix2 (Radeon 740M/760M/780M) ----
+    case 0x15BF: case 0x15C8:
+        return true;
+    }
+    return false;
 }
 
 static bool g_fault_ext;

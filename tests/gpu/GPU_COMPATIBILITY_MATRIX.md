@@ -12,7 +12,7 @@ This matrix is a test plan, not a compatibility claim. A row becomes **verified*
 | AMD Polaris | RX 580 / RX 570 | texture formats, BC compression, pipeline creation, frame pacing | Pending |
 | AMD RDNA 1 | RX 5700 XT | compute, timeline semaphores, swapchain recreation | Pending |
 | AMD RDNA 2 | RX 6600 / 6800 | FSR path, memory budget, device-loss diagnostics | Pending |
-| AMD RDNA 3 | RX 7600 / 7800 XT | GPL auto/off comparison, pipeline cache | Pending |
+| AMD RDNA 3 | RX 7600 / 7800 XT + Ryzen 5 8600G iGPU (Phoenix1, 0x15BF) | GPL auto/off comparison (GPL **off = device lost**, do not ship), pipeline cache, 1-2 px colour-dot glitch: `amd_fix` feedback-snapshot path **fixes it** (tester-confirmed on RX 7800 XT and 8600G) | Fix confirmed via `amd_fix = auto` (RDNA 3 only); performance soak still pending |
 | AMD RDNA 4 | RX 9070 series | driver feature discovery, regression suite | Pending |
 | NVIDIA Maxwell | GTX 970 / 980 | robustness2 fallback, texture and shader correctness | Pending |
 | NVIDIA Pascal | GTX 1060 / 1080 | memory pressure, cache persistence | Pending |
@@ -44,5 +44,6 @@ The in-game **GPU / Vulkan** tab persists these restart-scoped controls in `xcde
 - `gpu_profile = auto|compatibility`: compatibility disables the optional graphics-pipeline-library fast path.
 - `gpu_gpl = auto|off|on`: explicitly select graphics pipeline libraries (still gated by extension, feature and fast-link support).
 - `gpu_memory_budget = 0|1`: use `VK_EXT_memory_budget` when exposed.
+- `amd_fix = auto|on|off`: issue #7 RDNA 3 1-2 px colour dots — automatic engages the feedback-snapshot path only on AMD RDNA 3 (Navi 31/32/33 + Phoenix iGPUs); `on`/`off` force it anywhere. `LARECOMP_FEEDBACK_DIRECT` still overrides for diagnosis.
 
 Environment overrides remain available for diagnosis: `LARECOMP_GPU`, `LARECOMP_VK_GPL`, `XCDE_VK_GPL`, `XCDE_VK_BUDGET`, and `LARECOMP_VK_VALIDATION`.

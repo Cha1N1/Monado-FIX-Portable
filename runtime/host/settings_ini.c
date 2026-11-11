@@ -14,7 +14,7 @@ const char *const g_language_codes[N_LANGUAGES] = {"", "ja", "en-US", "fr", "de"
 const char *const g_language_names[N_LANGUAGES] = {"Auto", "Japanese", "English", "French", "German", "Italian", "Spanish",
                                                    "Chinese", "Korean", "Dutch", "Portuguese", "Russian",
                                                    "Chinese (Simplified)", "Chinese (Traditional)"};
-Settings g_settings = {.fps = 30, .fps_overlay = true, .upscaler_auto = true, .volume = 1.0f, .movie_audio = true, .res_mode = RES_MATCH, .upscaler = UPSCALE_FSR1, .upscale_quality = UQ_QUALITY, .game_blur = true, .vsync = true, .ui_lang = 1, .gpu_index = -1, .gpu_profile = GPU_PROFILE_AUTO, .gpu_gpl = GPU_GPL_AUTO, .occlusion = OCCL_AUTO, .gpu_memory_budget = true, .input_rumble = true};
+Settings g_settings = {.fps = 30, .fps_overlay = true, .upscaler_auto = true, .volume = 1.0f, .movie_audio = true, .res_mode = RES_MATCH, .upscaler = UPSCALE_FSR1, .upscale_quality = UQ_QUALITY, .game_blur = true, .vsync = true, .ui_lang = 1, .gpu_index = -1, .gpu_profile = GPU_PROFILE_AUTO, .gpu_gpl = GPU_GPL_AUTO, .occlusion = OCCL_AUTO, .amd_fix = AMD_FIX_AUTO, .session_fix = SESSION_FIX_AUTO, .gpu_memory_budget = true, .input_rumble = true};
 int g_window_w = 1280, g_window_h = 720;  // windowed size (settings.h)
 
 // [XCDE] Mods (runtime/services/romfs_virtual.c): xcde.ini `mod_<folder> = 0/1`; a folder not listed is on.
@@ -98,6 +98,8 @@ void settings_load(void) {
         else if (!strcmp(k, "gpu_profile")) g_settings.gpu_profile = !strcmp(v, "compatibility") ? GPU_PROFILE_COMPATIBILITY : GPU_PROFILE_AUTO;
         else if (!strcmp(k, "gpu_gpl")) g_settings.gpu_gpl = !strcmp(v, "on") ? GPU_GPL_ON : !strcmp(v, "off") ? GPU_GPL_OFF : GPU_GPL_AUTO;
         else if (!strcmp(k, "occlusion")) g_settings.occlusion = !strcmp(v, "on") ? OCCL_ON : !strcmp(v, "off") ? OCCL_OFF : OCCL_AUTO;
+        else if (!strcmp(k, "amd_fix")) g_settings.amd_fix = !strcmp(v, "on") ? AMD_FIX_ON : !strcmp(v, "off") ? AMD_FIX_OFF : AMD_FIX_AUTO;
+        else if (!strcmp(k, "session_fix")) g_settings.session_fix = !strcmp(v, "on") ? SESSION_FIX_ON : !strcmp(v, "off") ? SESSION_FIX_OFF : SESSION_FIX_AUTO;
         else if (!strcmp(k, "gpu_memory_budget")) g_settings.gpu_memory_budget = atoi(v) != 0;
         else if (!strcmp(k, "rumble")) g_settings.input_rumble = atoi(v) != 0;
         else if (!strcmp(k, "antialias")) g_settings.antialias = !strcmp(v, "smaa") ? AA_SMAA : AA_OFF;
@@ -158,10 +160,12 @@ void settings_save(void) {
     fprintf(f, "stick_deadzone = %d\n", g_settings.stick_deadzone);
     fprintf(f, "launcher_lang = %s\n", g_settings.ui_lang ? "en" : "es");  // (the launcher's key: kept when the game saves)
     fprintf(f, "cutscenes = %s\n", g_settings.cutscene_mode == 1 ? "30" : g_settings.cutscene_mode == 2 ? "30fg" : "same");
-    fprintf(f, "gpu_index = %d\ngpu_profile = %s\ngpu_gpl = %s\nocclusion = %s\ngpu_memory_budget = %d\n",
+    fprintf(f, "gpu_index = %d\ngpu_profile = %s\ngpu_gpl = %s\nocclusion = %s\namd_fix = %s\nsession_fix = %s\ngpu_memory_budget = %d\n",
             g_settings.gpu_index, g_settings.gpu_profile == GPU_PROFILE_COMPATIBILITY ? "compatibility" : "auto",
             g_settings.gpu_gpl == GPU_GPL_ON ? "on" : g_settings.gpu_gpl == GPU_GPL_OFF ? "off" : "auto",
             g_settings.occlusion == OCCL_ON ? "on" : g_settings.occlusion == OCCL_OFF ? "off" : "auto",
+            g_settings.amd_fix == AMD_FIX_ON ? "on" : g_settings.amd_fix == AMD_FIX_OFF ? "off" : "auto",
+            g_settings.session_fix == SESSION_FIX_ON ? "on" : g_settings.session_fix == SESSION_FIX_OFF ? "off" : "auto",
             g_settings.gpu_memory_budget);
     fprintf(f, "rumble = %d\n", g_settings.input_rumble);
     fprintf(f, "party_switch = %d\n", g_party_switch);

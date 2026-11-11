@@ -3745,6 +3745,15 @@ typedef struct { NvnTexture *key; TexBackend copy; } Snap;
 static Snap snaps[16];
 static int nsnaps;
 
+// [XCDE] issue #25: a freed texture's address can be reused by a new one; without this the
+// snapshot caches still match it by pointer and a stale snapshot is bound (textures that
+// "jump", broken models after long sessions).
+void vk_texture_gone(NvnTexture *t) {
+    snapshots_invalidate(t);
+    for (int k = 0; k < 8; k++) if (snap_tex[k] == t) { snap_tex[k] = NULL; snap_ok[k] = false; }
+    for (int k = 0; k < nsnaps; k++) if (snaps[k].key == t) snaps[k].key = NULL;  // (image is reused, key is not)
+}
+
 static NvnTexture *shader_texture_object(int stage, ShaderTexture *st_) {
     int slot = ((int)st_->handle_offset - 0x20) / 8;
     uint64_t h = (slot >= 0 && slot < 32) ? st.tex[stage][slot] : 0;
@@ -4131,7 +4140,20 @@ static void resolve_feedback(Prog *pr) {
             static int direct = -1;
             // T252 made snapshots the default on every vendor. [PERF-V5] the direct path (V4 behaviour, +16 % in battle) is the
             // default again on ALL vendors. LARECOMP_FEEDBACK_DIRECT=0 brings the snapshots back (if blue textures / flicker appear).
-            if (direct < 0) { const char *e = getenv("LARECOMP_FEEDBACK_DIRECT"); direct = !e || atoi(e) != 0; }
+            // [XCDE] issue #7: 1 = amd_fix auto turns the snapshots on for AMD RDNA 3 (the one lever the tester
+            // confirmed: LARECOMP_FEEDBACK_DIRECT=0 fixes the 1-2 px colour dots). 0 = auto leaves everything as
+            // it was; the launcher/menu toggle still works. GPL-off is NOT touched here (device lost, Test 1).
+            #define AMD_FIX_AUTO_RDNA3 1
+            if (direct < 0) {
+                const char *e = getenv("LARECOMP_FEEDBACK_DIRECT");
+                if (e) direct = atoi(e) != 0;                            // diagnostics: env wins
+                else if (g_settings.amd_fix == AMD_FIX_ON) direct = 0;   // amd_fix = on
+                else if (g_settings.amd_fix == AMD_FIX_OFF) direct = 1;  // amd_fix = off
+                else {                                                   // automatic
+                    direct = !(vk_amd_rdna3() && AMD_FIX_AUTO_RDNA3);
+                    if (!direct) LOG("[vk] AMD RDNA 3: feedback snapshots (amd_fix=auto, GitHub #7)\n");
+                }
+            }
             if (direct && t != st.rt.depth) continue;
             bool have = false;
             for (int k = 0; k < nfeedback; k++) have |= feedback_tex[k] == t;
@@ -7626,14 +7648,24 @@ static void *rq_worker(void *arg) {
 // [XCDE] decided and started once, whichever game thread asks first: an unguarded "on < 0" let two first callers start
 // two render workers (LASRecomp bd76094: two render threads on one queue = a driver deadlock, a boot hang with no log)
 static bool g_async_on;
+// [XCDE] issue #25: 1 = session_fix auto turns the async worker off for every GPU.
+// 0 = auto leaves everything as it was; the launcher/menu toggle still works.
+// Left at 0: the v9 workaround no longer fixes v11 (pityooka) and costs ~20-25 %.
+#define SESSION_FIX_AUTO_ON 0
+static bool session_safe(void) {
+    if (g_settings.session_fix == SESSION_FIX_ON) return true;
+    if (g_settings.session_fix == SESSION_FIX_OFF) return false;
+    return SESSION_FIX_AUTO_ON != 0;
+}
 static void backend_async_init(void) {
     const char *e = getenv("XCDE_ASYNC_RENDER");
-    g_async_on = !diag_deterministic() && !(e && *e == '0');
+    bool want = e ? atoi(e) != 0 : !session_safe();   // env wins: XCDE_ASYNC_RENDER=1 beats session_fix = on
+    g_async_on = !diag_deterministic() && want;
     if (g_async_on) {
         pthread_t th;
         pthread_create(&th, NULL, rq_worker, NULL);
         LOG("[vk] async render worker on\n");
-    }
+    } else LOG("[vk] async render worker off (session_fix)\n");
 }
 bool backend_async(void) {
     static pthread_once_t once = PTHREAD_ONCE_INIT;

@@ -32,9 +32,16 @@ enum { OCCL_AUTO = -1, OCCL_OFF = 0, OCCL_ON = 1 };  // [XCDE] occlusion-culling
 // it is writing; snapshots are the path the RDNA 3 driver handles correctly).
 // auto = on for AMD RDNA 3 (Navi 31/32/33 and Phoenix iGPUs), off everywhere else.
 enum { AMD_FIX_AUTO = -1, AMD_FIX_OFF = 0, AMD_FIX_ON = 1 };
+enum { OCCL_AUTO = -1, OCCL_OFF = 0, OCCL_ON = 1 };  // [XCDE] occlusion-culling override (see oq_enabled, exec.c)
+// [XCDE] issue #7: AMD RDNA 3 1-2 px multicoloured dots (the game samples the render target
+// it is writing; snapshots are the path the RDNA 3 driver handles correctly).
+// auto = on for AMD RDNA 3 (Navi 31/32/33 and Phoenix iGPUs), off everywhere else.
+enum { AMD_FIX_AUTO = -1, AMD_FIX_OFF = 0, AMD_FIX_ON = 1 };
+// [XCDE] issue #25: long-session corruption. auto = off (SESSION_FIX_AUTO_ON 0 in exec.c): the async
+// worker stays on as today; on/off override from xcde.ini / launcher / the in-game menu.
+enum { SESSION_FIX_AUTO = -1, SESSION_FIX_OFF = 0, SESSION_FIX_ON = 1 };
 extern const char *const g_language_codes[N_LANGUAGES];  // what the game is told: "ja", "en-US", "es", ...
 extern const char *const g_language_names[N_LANGUAGES];  // for the menu ("Auto", "Japanese", ..., "Spanish")
-
 typedef struct {
     int aspect;          // ASPECT_*: unlocked = fill the window (wider/taller views), original = 16:9 with bars
     bool fullscreen;
@@ -94,6 +101,7 @@ typedef struct {
     int gpu_gpl;         // GPU_GPL_*; explicit graphics-pipeline-library override, restart required
     int occlusion;       // OCCL_*; occlusion-culling override (restart): auto = off on AMD iGPUs, GitHub #14
     int amd_fix;         // AMD_FIX_*; RDNA 3 glitch mitigation (restart), GitHub #7
+    int session_fix;     // SESSION_FIX_*; no async render worker (restart), GitHub #25
     bool gpu_memory_budget; // use VK_EXT_memory_budget when exposed; informational allocator support
     bool input_rumble;   // [XCDE] hand rumble through to SDL when the game vibrates (hid cmds 201+hid_set.c)
     bool taa_off;        // [XCDE] remove only the game's temporal AA (lib_nx.ini tmaa): xcde.ini taa = 0 (default 1: kept)
