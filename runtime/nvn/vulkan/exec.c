@@ -7648,14 +7648,24 @@ static void *rq_worker(void *arg) {
 // [XCDE] decided and started once, whichever game thread asks first: an unguarded "on < 0" let two first callers start
 // two render workers (LASRecomp bd76094: two render threads on one queue = a driver deadlock, a boot hang with no log)
 static bool g_async_on;
+// [XCDE] issue #25: 1 = session_fix auto turns the async worker off for every GPU.
+// 0 = auto leaves everything as it was; the launcher/menu toggle still works.
+// Left at 0: the v9 workaround no longer fixes v11 (pityooka) and costs ~20-25 %.
+#define SESSION_FIX_AUTO_ON 0
+static bool session_safe(void) {
+    if (g_settings.session_fix == SESSION_FIX_ON) return true;
+    if (g_settings.session_fix == SESSION_FIX_OFF) return false;
+    return SESSION_FIX_AUTO_ON != 0;
+}
 static void backend_async_init(void) {
     const char *e = getenv("XCDE_ASYNC_RENDER");
-    g_async_on = !diag_deterministic() && !(e && *e == '0');
+    bool want = e ? atoi(e) != 0 : !session_safe();   // env wins: XCDE_ASYNC_RENDER=1 beats session_fix = on
+    g_async_on = !diag_deterministic() && want;
     if (g_async_on) {
         pthread_t th;
         pthread_create(&th, NULL, rq_worker, NULL);
         LOG("[vk] async render worker on\n");
-    }
+    } else LOG("[vk] async render worker off (session_fix)\n");
 }
 bool backend_async(void) {
     static pthread_once_t once = PTHREAD_ONCE_INIT;
