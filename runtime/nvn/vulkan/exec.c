@@ -3745,6 +3745,15 @@ typedef struct { NvnTexture *key; TexBackend copy; } Snap;
 static Snap snaps[16];
 static int nsnaps;
 
+// [XCDE] issue #25: a freed texture's address can be reused by a new one; without this the
+// snapshot caches still match it by pointer and a stale snapshot is bound (textures that
+// "jump", broken models after long sessions).
+void vk_texture_gone(NvnTexture *t) {
+    snapshots_invalidate(t);
+    for (int k = 0; k < 8; k++) if (snap_tex[k] == t) { snap_tex[k] = NULL; snap_ok[k] = false; }
+    for (int k = 0; k < nsnaps; k++) if (snaps[k].key == t) snaps[k].key = NULL;  // (image is reused, key is not)
+}
+
 static NvnTexture *shader_texture_object(int stage, ShaderTexture *st_) {
     int slot = ((int)st_->handle_offset - 0x20) / 8;
     uint64_t h = (slot >= 0 && slot < 32) ? st.tex[stage][slot] : 0;

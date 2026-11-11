@@ -128,6 +128,7 @@ typedef struct TexBackend {
 } TexBackend;
 
 TexBackend *vk_tex(NvnTexture *t, bool for_render);  // backend image (uploads CPU contents unless for_render)
+void vk_texture_gone(NvnTexture *t);  // [XCDE] issue #25: drop snapshot caches for a freed texture
 bool vk_tex_add_storage(NvnTexture *t, VkCommandBuffer cb);  // [XCDE] T192 (textures.c)
 VkFormat vk_format(uint32_t nvn_format);
 bool vk_format_alpha_one(uint32_t nvn_format);

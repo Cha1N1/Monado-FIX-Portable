@@ -593,6 +593,7 @@ static TexBackend *tex_backend(NvnTexture *t) {
 }
 
 void backend_texture_destroyed(NvnTexture *t) {
+    vk_texture_gone(t);  // [XCDE] issue #25: drop snapshot caches keyed by this (about-to-be-freed) pointer
     TexBackend *b = t->backend;
     if (b && b->nshare) {  // [XCDE] a shared image: only the last texture over it frees it
         for (int i = 0; i < b->nshare; i++)
