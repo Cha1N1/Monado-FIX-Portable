@@ -728,6 +728,9 @@ static const char *builtin_src(const char *name, int *stage) {
                "  vec4 q = pc.m * ndc;\n"
                "  vec2 puv = vec2(q.x / q.w * 0.5 + 0.5, 0.5 - q.y / q.w * 0.5);\n"
                "  oMv = pc.b.y > 0.5 && abs(q.w) > 1e-7 ? puv - uv : vec2(0.0);\n"
+               // [XCDE] T260: no NaN / Inf / absurd vectors for the upscaler (sky at infinity, w near 0): FSR 3 keeps them in its history
+               "  if (any(isnan(oMv)) || any(isinf(oMv))) oMv = vec2(0.0);\n"
+               "  oMv = clamp(oMv, vec2(-1.0), vec2(1.0));\n"
                // [XCDE] T215: where the scene has geometry, the game's own velocity (per object: characters, animation)
                // RGB10A2: R = sqrt|v.x|, G = sqrt|v.y|, alpha bit 0 = x negative, bit 1 = y positive (UV units, previous
                // minus current, as ours - measured against the camera motion on static scenery: XCDE_TMP_VEL_FIT)
@@ -740,7 +743,15 @@ static const char *builtin_src(const char *name, int *stage) {
                // bits as a square root: our float camera motion is the same thing, exact. Keep ours unless the game's
                // differs by more than its rounding (3 steps of sqrt-coded 10 bits) - a pixel with its own motion.
                "    vec2 step = 6.0 * vec2(v.r, v.g) / 1023.0 + 2.0 / (1023.0 * 1023.0);\n"
-               "    oMv = pc.b.w > 0.5 && all(lessThanEqual(abs(gv - oMv), step)) ? oMv : gv;\n"
+               // [XCDE] T260: a pixel whose own motion differs from the camera's (characters, animated things, wrong
+               // vectors) is marked in the reactive mask (oHud): the upscalers trust history less there (less ghosting
+               // / trembling). Before T260 this mask was always empty (colour == scene since the HUD is not in the input).
+               // a "velocity" more than 10% of the screen away from the camera's motion is not an object moving: it is a wrong
+               // texture / garbage (history would be read from anywhere): keep ours there
+               "    bool far = any(greaterThan(abs(gv - oMv), vec2(0.1)));\n"
+               "    bool dyn = !far && any(greaterThan(abs(gv - oMv), step));\n"
+               "    oMv = (pc.b.w > 0.5 || far) && !dyn ? oMv : gv;\n"
+               "    oHud = max(oHud, dyn ? 0.4 : 0.0);\n"
                "  }\n"
                "}\n";
     }

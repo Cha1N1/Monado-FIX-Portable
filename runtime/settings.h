@@ -90,6 +90,7 @@ typedef struct {
     int gpu_gpl;         // GPU_GPL_*; explicit graphics-pipeline-library override, restart required
     int occlusion;       // OCCL_*; occlusion-culling override (restart): auto = off on AMD iGPUs, GitHub #14
     bool gpu_memory_budget; // use VK_EXT_memory_budget when exposed; informational allocator support
+    bool input_rumble;   // [XCDE] hand rumble through to SDL when the game vibrates (hid cmds 201+hid_set.c)
     bool taa_off;        // [XCDE] remove only the game's temporal AA (lib_nx.ini tmaa): xcde.ini taa = 0 (default 1: kept)
 } Settings;
 

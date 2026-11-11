@@ -27,6 +27,7 @@ void vk_request_swapchain_recreate(void);
 bool dlss_available(void);
 const char *dlss_status(void);
 bool diag_deterministic(void);
+void plat_terminate(void);  // [XCDE] GitHub #22: the F1 menu's "exit the game" button (the platform's immediate exit)
 }
 
 static XcdeFpsMeter fps_meter;
@@ -73,6 +74,11 @@ extern "C" void menu_apply_window_requests(void *sdl_window) {
 }
 
 extern "C" void menu_test_open(void) { open_ = true; }
+
+extern "C" void menu_open_request(void) {  // [XCDE] GitHub #22: Start + Select on the controller
+    if (!open_) open_ = true;
+    input_reset();  // (keys / buttons held when the menu opened are released for the game)
+}
 
 static ImGuiKey key_of(SDL_Scancode s) {
     switch (s) {
@@ -209,7 +215,8 @@ static void ui(void) {
     ImGui::SetNextWindowBgAlpha(0.92f);
     ImGui::Begin(T("Opciones  (F1 / Esc para volver al juego)"), nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
                  ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
-    ImGui::BeginChild("options_body",ImVec2(0,-ImGui::GetFrameHeightWithSpacing()*2),ImGuiChildFlags_Borders);
+    ImGui::BeginChild("options_body",ImVec2(0,-ImGui::GetFrameHeightWithSpacing()*2),ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_AlwaysVerticalScrollbar);  // (short windows: every option reachable)
     if (ImGui::BeginTabBar("tabs")) {
         if (ImGui::BeginTabItem(T("Gráficos"))) {
             monado_quality_controls(&g_settings,g_settings.ui_lang!=0);
@@ -223,6 +230,12 @@ static void ui(void) {
             int ri = 0;
             for (int i = 0; i < 7; i++) if (k_res_mode[i] == g_settings.res_mode) ri = i;
             if (monado_combo(T("Resolución interna"), &ri, TL(k_res_ui, 7).p, 7)) g_settings.res_mode = k_res_mode[ri];
+            if (g_settings.res_mode >= 1 && g_settings.res_mode <= 8)
+                // [XCDE] GitHub #22: an Nx internal resolution keeps the window's shape only horizontally: in a wider-than-
+                // 16:9 window (16:10, 21:9, 32:9) the fixed line count must stretch to fill it, and the image goes soft.
+                ImGui::TextWrapped(g_settings.ui_lang
+                    ? "An Nx resolution keeps the Switch's line count: in windows wider or taller than 16:9 it is stretched. \"Same as the window\" stays sharp."
+                    : "Una resolución Nx mantiene las líneas de la Switch: en ventanas m\xC3\xA1s anchas o altas que 16:9 se estira. \xC2\xABIgual que la ventana\xC2\xBB lo mantiene n\xC3\xADtido.");
             static const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal)", "NVIDIA DLSS (temporal, RTX)"};
             static const int upv[] = {UPSCALE_BILINEAR, UPSCALE_FSR1, UPSCALE_FSR3, UPSCALE_DLSS};
             int ui_ = 0;
@@ -347,6 +360,7 @@ static void ui(void) {
         }
         if (ImGui::BeginTabItem(T("Controles"))) {
             ImGui::TextWrapped(T("La asignación de teclas y botones se cambia en el launcher (Play Monado.bat), pestaña Controles."));
+            ImGui::Checkbox(g_settings.ui_lang ? "Gamepad vibration" : "Vibración del mando", &g_settings.input_rumble);
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -358,6 +372,17 @@ static void ui(void) {
     if (ImGui::Button(g_settings.ui_lang ? "Apply" : "Aplicar")) { settings_save(); saved_note = true; }
     ImGui::SameLine();
     if (ImGui::Button(T("Volver al juego"))) { open_ = false; input_reset(); }
+    ImGui::SameLine();
+    {   // [XCDE] GitHub #22: a close-the-game option where the settings are (a confirm: press again within 2 s).
+        static Uint32 asked_at;
+        static bool sure;
+        if (ImGui::Button(g_settings.ui_lang ? "Exit the game" : "Salir del juego")) {
+            if (sure) { settings_save(); plat_terminate(); }
+            else { asked_at = SDL_GetTicks(); sure = true; }
+        }
+        if (sure && SDL_GetTicks() - asked_at > 2000) sure = false;  // (timed out)
+        if (sure) { ImGui::SameLine(); ImGui::TextDisabled(g_settings.ui_lang ? "Sure? press again." : "\xC2\xBFSeguro? pulsa otra vez."); }
+    }
     if (saved_note) { ImGui::SameLine(); ImGui::TextDisabled(T("Guardado en xcde.ini")); }
     ImGui::End();
 }

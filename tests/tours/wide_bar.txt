@@ -1,0 +1,2 @@
+# battle (enemy status bar): jump next to the nearest enemy and fight for 30 s
+battle 1800

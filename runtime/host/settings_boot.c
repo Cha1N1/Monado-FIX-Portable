@@ -7,7 +7,7 @@ const char *const g_language_names[N_LANGUAGES] = {"Auto", "Japanese", "English"
                                                    "Chinese", "Korean", "Dutch", "Portuguese", "Russian",
                                                    "Chinese (Simplified)", "Chinese (Traditional)"};
 Settings g_settings = {.fps_overlay = true, .upscaler_auto = true, .volume = 1.0f, .movie_audio = true, .gpu_index = -1, .gpu_profile = GPU_PROFILE_AUTO,
-                       .gpu_gpl = GPU_GPL_AUTO, .occlusion = OCCL_AUTO, .gpu_memory_budget = true};
+                       .gpu_gpl = GPU_GPL_AUTO, .occlusion = OCCL_AUTO, .gpu_memory_budget = true, .input_rumble = true};
 
 void settings_load(void) {}
 void settings_save(void) {}

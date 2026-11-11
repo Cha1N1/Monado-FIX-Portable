@@ -20,4 +20,5 @@ bool renderer_format_is_depth(uint32_t f);
 bool renderer_format_has_stencil(uint32_t f);
 void renderer_mark_gpu_owned(NvnTexture *t);
 void input_handle_event(const SDL_Event *e);
+void input_rumble_apply(void);  // [XCDE][RUMBLE] hang on the owner thread's regular loop (device.c ui_run)
 bool input_user_blocked(const SDL_Event *e);

@@ -18,6 +18,8 @@ bool menu_handle_event(const SDL_Event *e);
 bool menu_is_open(void);
 // Main thread: apply window requests (fullscreen) made from the menu.
 void menu_apply_window_requests(void *sdl_window);
+// Open it like F1 does (the controller: Start + Select, GitHub #22): same thread that runs the event loop.
+void menu_open_request(void);
 // T258: renderer thread, once per native game frame (not repeated presents / generated frames).
 void menu_fps_tick(uint64_t now_ns);
 

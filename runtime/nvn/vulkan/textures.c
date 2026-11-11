@@ -1370,6 +1370,10 @@ VkSampler vk_sampler(NvnSamplerDesc *d) {
     if (mf <= 1) si.maxLod = si.minLod + 0.25f;  // not mipmapped: stay on the base level
     if (si.maxLod < si.minLod) si.maxLod = si.minLod;
     si.mipLodBias = d->lod_bias;
+    if (mf > 1 && !d->compare_mode && !d->reduction) {  // [XCDE] T260: texture LOD bias for FSR 3 / DLSS (temporal.c tmp_lod_bias)
+        extern float tmp_lod_bias(void);
+        si.mipLodBias += tmp_lod_bias();
+    }
     if (d->max_aniso > 1) { si.anisotropyEnable = VK_TRUE; si.maxAnisotropy = fminf(d->max_aniso, 16); }
     static float lodmin = -1;
     if (lodmin < 0) lodmin = getenv("LARECOMP_LOD_MIN") ? (float)atof(getenv("LARECOMP_LOD_MIN")) : 0;

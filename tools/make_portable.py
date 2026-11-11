@@ -214,7 +214,6 @@ PLAY_BAT = ('@echo off\r\n'
             'rem Monado: launcher (graphics, scaling, controls, language), then the game.\r\n'
             'rem Portable folder: every DLL is in build\\, nothing outside this folder is needed.\r\n'
             'cd /d "%~dp0"\r\n'
-            'set XCDE_FG_NO_HUDLESS=1\r\n'
             'start "" "build\\xcde_launcher.exe"\r\n')
 
 

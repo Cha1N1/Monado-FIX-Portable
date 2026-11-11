@@ -103,11 +103,19 @@ static void maybe_edit(File *f) {
     static char edits[1024];
     edits[0] = 0;  // (a mod's lib_nx.ini is edited again after it replaces the game's)
     settings_load();  // (the romfs may be scanned before the window reads it; reading it twice is harmless)
-    if (!g_settings.game_blur) strcat(edits, "AntiAliasing=off,tmaa=off,blur2=off,furBlur=off");
-    // [XCDE] FSR 3 / DLSS replace the game's own anti-aliasing (its temporal AA would blur their jittered input)
-    else if (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS) strcat(edits, "AntiAliasing=off,tmaa=off");
-    // [XCDE] xcde.ini taa = 0: only the game's temporal AA (tmaa) off; its other AA and motion blur stay as set above
-    if (g_settings.taa_off) { if (*edits) strcat(edits, ","); strcat(edits, "tmaa=off"); }
+    // [XCDE] blur2 / furBlur follow the game-blur option; the game's FXAA stays off for the purists (blur off)
+    // and under temporal upscalers (it would soften their input). GitHub #7: the game's temporal AA (tmaa) follows
+    // the xcde.ini taa option only - it is the one setting that smooths the tiny bright particles / speculars at the
+    // rock seams (they flickered hard without it; the user's game-blur=0 + FSR 3 build had every game AA forced off).
+    // tmaa only has to be off when our Halton jitter is on (it would blur the jittered input, see #14): the jitter is
+    // off by default since #14, XCDE_TMP_JIT_FORCE revives it as runtime/nvn/vulkan/temporal.c tmp_jitter decides.
+    if (!g_settings.game_blur) strcat(edits, "AntiAliasing=off,blur2=off,furBlur=off");
+    else if (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS) strcat(edits, "AntiAliasing=off");
+    // [XCDE] xcde.ini taa = 0 (or the revived jitter): the game's temporal AA off; its other AA and motion blur as above
+    {
+        extern bool tmp_jitter_active(void);
+        if (g_settings.taa_off || tmp_jitter_active()) { if (*edits) strcat(edits, ","); strcat(edits, "tmaa=off"); }
+    }
     // T259: opt-in, whitelisted cosmetic edits. Mods are read first; explicit diagnostic edits below win.
     static const char *effect_keys[]={"tssao=off", "ssr=off", "bloom=off", "godray=off", "shadowCloud=off"};
     for (unsigned i=0;i<5;i++) if (g_settings.effects_off&(1u<<i)) {

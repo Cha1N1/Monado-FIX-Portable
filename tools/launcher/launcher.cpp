@@ -23,6 +23,14 @@
 #include "../../runtime/ui/gpu_picker.h"
 #include "../../runtime/ui/theme.h"
 #include "../../runtime/ui/quality_controls.h"
+// [XCDE] GitHub #18: the build ids of the game NSOs this exe's code was lifted from (gen.py writes these
+// with the functions). Older checkouts without them build fine, just without the version check below.
+#if __has_include("../../generated/main/main_id.h")
+#include "../../generated/main/main_id.h"
+#endif
+#if __has_include("../../generated/sdk/sdk_id.h")
+#include "../../generated/sdk/sdk_id.h"
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -91,6 +99,7 @@ struct Cfg {
     int quality_preset=0, dynamic_min_height=0, dynamic_max_height=0;
     unsigned effects_off=0;
     int gpu_profile = 0, gpu_gpl = -1;
+    int occlusion = -1;     // [XCDE][FSR3] -1 automatic (off on AMD iGPUs), 0 off, 1 on (xcde.ini occlusion)
     bool gpu_memory_budget = true, gpu_performance = false, gpu_keep_heavy = false;
     bool fullscreen = false;
     int aspect = ASPECT_UNLOCKED;
@@ -118,6 +127,7 @@ struct Cfg {
     int mouse_sens = 50;
     int stick_deadzone = 0;     // % of the stick's travel read as centred (0: raw)
     bool mouse_invert = false;
+    bool rumble = true;     // [XCDE] hand the game's controller vibration to SDL (xcde.ini rumble)
     int ui_lang = 1;            // the launcher's own language: 0 Spanish, 1 English (xcde.ini launcher_lang)
     int icons = 0;              // button prompts: 0 auto (the connected controller, else the keyboard), 1 Switch, 2 Xbox, 3 PlayStation, 4 keyboard
 };
@@ -403,6 +413,8 @@ static void load() {
         else if (!strcmp(k, "gpu_profile")) g.gpu_profile = !strcmp(v, "compatibility");
         else if (!strcmp(k, "gpu_gpl")) g.gpu_gpl = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
         else if (!strcmp(k, "gpu_memory_budget")) g.gpu_memory_budget = atoi(v) != 0;
+        else if (!strcmp(k, "occlusion")) g.occlusion = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
+        else if (!strcmp(k, "rumble")) g.rumble = atoi(v) != 0;
         else if (!strcmp(k, "gpu_preset")) { g.quality_preset=xcde_quality_parse(v); g.gpu_performance=g.quality_preset==QUALITY_PERFORMANCE || g.quality_preset==QUALITY_POTATO; }
         else if (!strcmp(k, "low_memory")) g.gpu_performance=atoi(v)!=0;
         else if (!strcmp(k, "dynamic_min_height")) g.dynamic_min_height=std::clamp(atoi(v),0,4320);
@@ -442,6 +454,7 @@ static bool save() {
     fprintf(f, "gpu_uuid = %s\ngpu_index = %d\ngpu_profile = %s\ngpu_gpl = %s\ngpu_memory_budget = %d\ngpu_preset = %s\ngpu_keep_heavy = %d\n",
         g.gpu_uuid, g.gpu_index, g.gpu_profile ? "compatibility" : "auto", g.gpu_gpl < 0 ? "auto" : g.gpu_gpl ? "on" : "off",
         g.gpu_memory_budget, xcde_quality_name(g.quality_preset), g.gpu_keep_heavy);
+    fprintf(f, "occlusion = %s\n", g.occlusion == 1 ? "on" : g.occlusion == 0 ? "off" : "auto");
     fprintf(f,"low_memory = %d\ndynamic_min_height = %d\ndynamic_max_height = %d\neffects_off = %u\n",g.gpu_performance,g.dynamic_min_height,g.dynamic_max_height,g.effects_off);
     fprintf(f, "fullscreen = %d\nwindow = %s\nresolution = %s\nupscaler = %s\nantialias = %s\nshow_fps = %d\n", g.fullscreen,
             k_wins[g.win], k_res_ini[g.res], g.upscaler_auto ? "auto" : k_ups_ini[g.upscaler], g.smaa ? "smaa" : "off", g.show_fps);
@@ -466,7 +479,7 @@ static bool save() {
         fprintf(f, "bind_key2_%s = %s\n", k_ini[i], key_ini_name(g.key2[i]));
     }
     fprintf(f, "mouse_look = %d\nmouse_sens = %d\nmouse_invert = %d\n", g.mouse_look, g.mouse_sens, g.mouse_invert);
-    fprintf(f, "stick_deadzone = %d\n", g.stick_deadzone);
+    fprintf(f, "stick_deadzone = %d\nrumble = %d\n", g.stick_deadzone, g.rumble);
     fprintf(f, "launcher_lang = %s\n", g.ui_lang ? "en" : "es");
     return xcde_ini_commit(f, tmp, settings_path.c_str()) != 0;
 }
@@ -474,6 +487,45 @@ static bool save() {
 static bool exists(const char *rel) {
     SDL_PathInfo pi;
     return SDL_GetPathInfo(path(rel).c_str(), &pi);
+}
+
+// [XCDE] GitHub #18: game files from another game version can't run on this build (the recompiled code
+// matches exactly one NSO revision): find it out here so the player sees a clear message in the launcher
+// instead of a window-less game whose log only says "no function at ..." deep in nn::init::Start.
+static char g_mismatch_desc[8] = "";    // "" = ok, else the exefs file that differs ("main" / "sdk")
+static char g_mismatch_got[65], g_mismatch_want[65];
+static bool nso_matches(const char *rel, const char *want, char got[65]) {
+    FILE *f = fopen(path(rel).c_str(), "rb");
+    if (!f) return true;  // (the file is missing: the game-files message covers that case)
+    uint8_t hdr[0x60];
+    bool ok = fread(hdr, 1, sizeof hdr, f) == sizeof hdr && !memcmp(hdr, "NSO0", 4);
+    fclose(f);
+    if (!ok) return true;  // (not a plain NSO: let the runtime's own loader explain)
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < 32; i++) {
+        got[2 * i] = hex[hdr[0x40 + i] >> 4];
+        got[2 * i + 1] = hex[hdr[0x40 + i] & 15];
+    }
+    got[64] = 0;
+    for (int l = 64; l >= 2 && got[l - 1] == '0' && got[l - 2] == '0'; l -= 2) got[l - 2] = 0;  // (nso.py's rstrip)
+    return !memcmp(got, want, strlen(want));
+}
+static void check_game_version() {
+#ifdef XCDE_GAME_MAIN_ID
+    if (exists("targets/exefs/main") && !nso_matches("targets/exefs/main", XCDE_GAME_MAIN_ID,
+                                                     g_mismatch_got)) {
+        snprintf(g_mismatch_desc, sizeof g_mismatch_desc, "main");
+        snprintf(g_mismatch_want, sizeof g_mismatch_want, "%s", XCDE_GAME_MAIN_ID);
+        return;
+    }
+#endif
+#ifdef XCDE_GAME_SDK_ID
+    if (exists("targets/exefs/sdk") && !nso_matches("targets/exefs/sdk", XCDE_GAME_SDK_ID,
+                                                    g_mismatch_got)) {
+        snprintf(g_mismatch_desc, sizeof g_mismatch_desc, "sdk");
+        snprintf(g_mismatch_want, sizeof g_mismatch_want, "%s", XCDE_GAME_SDK_ID);
+    }
+#endif
 }
 
 static std::string g_status;
@@ -494,6 +546,8 @@ static void launch() {
     si.cb = sizeof si;
     PROCESS_INFORMATION pi = {};
     std::string log = path("build/last_game.log");
+    // [XCDE] T260: the previous run's log is kept (last_game.prev.log): the report needs the run that failed
+    MoveFileExA(log.c_str(), path("build/last_game.prev.log").c_str(), MOVEFILE_REPLACE_EXISTING);
     SECURITY_ATTRIBUTES sa = {sizeof sa, NULL, TRUE};
     HANDLE h = CreateFileA(log.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h != INVALID_HANDLE_VALUE) {
@@ -740,7 +794,7 @@ static void tab_home() {
     ImGui::TextWrapped("%s",g.ui_lang ? "For modest hardware, start with Potato and a 30 FPS target. Quality and frame rate are independent." :
         "En equipos modestos, empieza con Patata y un objetivo de 30 FPS. La calidad y los FPS se eligen por separado.");
     ImGui::SeparatorText(g.ui_lang ? "Shader preparation" : "Preparación de shaders");
-    ImGui::BeginDisabled(pc_running() || !exists("build/xcde.exe"));
+    ImGui::BeginDisabled(pc_running() || !exists("build/xcde.exe") || *g_mismatch_desc);
     if (ImGui::Button(T("Precompilar shaders"))) pc_start(false);
     ImGui::EndDisabled();
     static uint64_t checked; static bool prepared;
@@ -787,6 +841,18 @@ static void tab_graphics() {
     if (*gpu_error) ImGui::TextWrapped("%s", gpu_error);
     if (ImGui::Button(g.ui_lang ? "Refresh adapters" : "Actualizar adaptadores")) { free(adapters); adapters = nullptr; probed = false; }
     ImGui::Checkbox(g.ui_lang ? "Restore heavy AMD volume effects" : "Restaurar efectos volumétricos pesados AMD", &g.gpu_keep_heavy);
+    {   // [XCDE][FSR3] GitHub #14: occlusion culling misresolves on AMD integrated GPUs (the floor-vanishing
+        // class of bug, oq_enabled in exec.c); automatic = off there, on elsewhere, overridable from here
+        // and from the in-game menu (xcde.ini occlusion = auto | off | on, read at startup).
+        static const char *occl_ui[] = {"Automático (AMD integrada: apagada)", "Desactivada", "Activada"};
+        static const char *occl_en[] = {"Automatic (AMD integrated: off)", "Off", "On"};
+        int occl = g.occlusion == 0 ? 1 : g.occlusion == 1 ? 2 : 0;
+        if (monado_combo(g.ui_lang ? "Occlusion culling (may help FSR 3) (restart)" : "Culling por oclusión (puede ayudar a FSR 3) (al reiniciar)",
+                         &occl, g.ui_lang ? occl_en : occl_ui, 3))
+            g.occlusion = occl == 1 ? 0 : occl == 2 ? 1 : -1;
+        ImGui::SetItemTooltip(T("Resuelve lo que se ve tras el suelo / el suelo que desaparece con FSR 3 en algunas GPUs.\n"
+                                "Automático: solo lo apaga en las gráficas integradas AMD donde falla."));
+    }
     ImGui::TextDisabled(g.ui_lang ? "GPU changes apply on next launch." : "Los cambios GPU se aplican al iniciar el juego.");
     }
     ImGui::SeparatorText(T("Pantalla"));
@@ -900,6 +966,9 @@ static void tab_controls() {
     ImGui::SetItemTooltip(T("Pasa el control al siguiente miembro del grupo, en el campo y en combate. Cada uno se queda\n"
                           "donde está y conserva sus recargas de artes; el anterior pasa a la IA. No funciona en menús ni\n"
                           "escenas, y en combate salta a los miembros caídos."));
+    ImGui::Checkbox(T("Vibración del mando"), &g.rumble);  // [XCDE] the game's vibration -> SDL gamepad rumble
+    ImGui::SetItemTooltip(T("Activa el motor del mando cuando el juego manda vibración (por ejemplo en combate).\n"
+                            "También se puede cambiar dentro del juego, en el menú, pestaña Controles."));
     {
         static const char *ic_ui[] = {"Automático (el mando conectado; sin mando, teclado)", "Switch", "Xbox", "PlayStation",
                                       "Teclado (las teclas asignadas)"};
@@ -996,13 +1065,26 @@ static void scan_mods() {
 }
 
 // [XCDE] "Crear reporte": reports\xcde_report_<date>.zip with what a bug report needs - the last two game logs (this
-// run's and the previous one, build\lasrecomp*.log), xcde.ini and the newest crash report (crash\, text + minidump).
+// run's and the previous one, build\last_game*.log), every other build\*.log, xcde.ini and the newest crash report (crash\, text + minidump).
 // No saves or game files. Zipped by the tar.exe that Windows 10+ ships; the folder opens when it is done.
 static void make_report() {
     std::vector<std::string> files;
-    for (const char *f : {"build/lasrecomp.log", "build/lasrecomp.prev.log", "xcde.ini"})
+    for (const char *f : {"build/last_game.log", "build/last_game.prev.log", "build/last_precompile.log", "build/launcher.log",
+                          "build/lasrecomp.log", "build/lasrecomp.prev.log", "xcde.ini"})
         if (GetFileAttributesA(path(f).c_str()) != INVALID_FILE_ATTRIBUTES) files.push_back(f);
     WIN32_FIND_DATAA fd;
+    {   // [XCDE] T260: any other build\*.log (the report only had xcde.ini: the game log is build\last_game.log, not lasrecomp.log)
+        HANDLE hl = FindFirstFileA(path("build/*.log").c_str(), &fd);
+        if (hl != INVALID_HANDLE_VALUE) {
+            do {
+                std::string rel = std::string("build/") + fd.cFileName;
+                bool dup = false;
+                for (const std::string &f : files) if (_stricmp(f.c_str(), rel.c_str()) == 0) dup = true;
+                if (!dup) files.push_back(rel);
+            } while (FindNextFileA(hl, &fd));
+            FindClose(hl);
+        }
+    }
     std::string newest;
     HANDLE h = FindFirstFileA(path("crash/crash_*.txt").c_str(), &fd);
     if (h != INVALID_HANDLE_VALUE) {
@@ -1151,6 +1233,7 @@ int main(int argc, char **argv) {
     ImGui_ImplSDL3_InitForSDLRenderer(win, ren);
     ImGui_ImplSDLRenderer3_Init(ren);
     load();
+    check_game_version();  // [XCDE] GitHub #18: refuse launching on another game version's files
     if (shot && argc>4 && !strcmp(argv[4],"es")) g.ui_lang=0;
     bool have_game = exists("targets/exefs/main") || exists("targets/exefs");
     bool have_exe = exists("build/xcde.exe");
@@ -1205,6 +1288,14 @@ int main(int argc, char **argv) {
         ImGui::Separator();
         if (!have_game) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", T("Faltan los archivos del juego en targets/ (exefs y romfs de tu copia)."));
         else if (!have_exe) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", T("Falta build/xcde.exe (compila el juego primero)."));
+        else if (*g_mismatch_desc) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), g.ui_lang ?
+            "The game files in targets\\exefs\\%s are from another game version (their build id is %s).\n"
+            "This build only works with the game version inside this package (build id %s). Restore the\n"
+            "package's original targets\\exefs (the exact same game version) and start again." :
+            "Los archivos targets\\exefs\\%s son de otra versión del juego (su build id es %s).\n"
+            "Este build solo funciona con la versión que trae el paquete (build id %s). Restaura los\n"
+            "targets\\exefs originales del paquete (esa misma versión del juego) y vuelve a empezar.",
+            g_mismatch_desc, g_mismatch_got, g_mismatch_want);
         else ImGui::TextDisabled(T("%s"), g_status.empty() ? (pc_done() ? T("Listo. Guardado: save/   Ajustes: xcde.ini")
                                                                    : T("Listo. La primera vez, JUGAR prepara los shaders antes (unos minutos)"))
                                                        : g_status.c_str());
@@ -1224,7 +1315,7 @@ int main(int argc, char **argv) {
             launched = g_launched_ok;
             if (launched) run = false;
         }
-        ImGui::BeginDisabled(!have_game || !have_exe || launched || pc_running());
+        ImGui::BeginDisabled(!have_game || !have_exe || launched || pc_running() || *g_mismatch_desc);
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.55f, 0.3f, 1));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.7f, 0.4f, 1));
         if (ImGui::Button(T("JUGAR"), ImVec2(200 * scale, 0))) {

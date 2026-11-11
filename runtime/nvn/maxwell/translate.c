@@ -707,7 +707,12 @@ static void glsl_sample(Ctx *c, char *out, int slot, const char *const *co, cons
         if (off) snprintf(xs, sizeof xs, "(%s + float((%s).x) / float(tsize%d(%s).x))", co[0], off, slot, L);
         else snprintf(xs, sizeof xs, "%s", co[0]);
     } else if (n == 2) {
-        if (off) snprintf(xs, sizeof xs, "(vec2(%s, %s) + vec2(%s) / vec2(tsize%d(%s).xy))", co[0], co[1], off, slot, L);
+        // [XCDE] frost fix: remap the sampled UVs into the centred 16:9 box (uvb no-ops while the row is zero)
+        if (c->stage == STAGE_FRAGMENT) {
+            c->uses_rscale = true;
+            if (off) snprintf(xs, sizeof xs, "uvb((vec2(%s, %s) + vec2(%s) / vec2(tsize%d(%s).xy)), rscale[%d])", co[0], co[1], off, slot, L, slot + 65);
+            else snprintf(xs, sizeof xs, "uvb(vec2(%s, %s), rscale[%d])", co[0], co[1], slot + 65);
+        } else if (off) snprintf(xs, sizeof xs, "(vec2(%s, %s) + vec2(%s) / vec2(tsize%d(%s).xy))", co[0], co[1], off, slot, L);
         else snprintf(xs, sizeof xs, "vec2(%s, %s)", co[0], co[1]);
     } else {
         if (off && !cube) snprintf(xs, sizeof xs, "vec3(vec2(%s, %s) + vec2(%s) / vec2(tsize%d(%s).xy), %s)", co[0], co[1], off, slot, L, co[2]);
@@ -897,7 +902,11 @@ static void emit_tld4s(Ctx *c, uint64_t w) {
     const char *A = reg(c, a, ra), *Bv = reg(c, b, rb);
     int slot = tex_slot(c, index, TEXTYPE_2D, false, false);
     char call[512];
-    sprintf(call, "textureGather(t%d, vec2(as_type<float>(%s), as_type<float>(%s)), %d)", slot, A, Bv, comp);
+    if (c->stage == STAGE_FRAGMENT) {  // [XCDE] frost fix: same box remap as glsl_sample
+        c->uses_rscale = true;
+        sprintf(call, "textureGather(t%d, uvb(vec2(as_type<float>(%s), as_type<float>(%s)), rscale[%d]), %d)", slot, A, Bv, slot + 65, comp);
+    } else
+        sprintf(call, "textureGather(t%d, vec2(as_type<float>(%s), as_type<float>(%s)), %d)", slot, A, Bv, comp);
     write_tex_result(c, slot, call, 0xF, d0, d1, true, f16);
 }
 
@@ -933,7 +942,12 @@ static void emit_tld4(Ctx *c, uint64_t w) {
     } else if (offmode == 3) { fail(c, "tld4 offset mode 3"); return; }
     if (dc) { c->reg_used[pr] = 1; sprintf(dref, "as_type<float>(r%d)", pr); pr++; }
     char uv[512];
-    if (off[0]) sprintf(uv, "(vec2(%s, %s) + vec2(%s) / vec2(tsize%d(0).xy))", x, y, off, slot);
+    // [XCDE] frost fix: same box remap as glsl_sample (tld4 is fragment-only, 2D)
+    if (c->stage == STAGE_FRAGMENT) {
+        c->uses_rscale = true;
+        if (off[0]) sprintf(uv, "uvb((vec2(%s, %s) + vec2(%s) / vec2(tsize%d(0).xy)), rscale[%d])", x, y, off, slot, slot + 65);
+        else sprintf(uv, "uvb(vec2(%s, %s), rscale[%d])", x, y, slot + 65);
+    } else if (off[0]) sprintf(uv, "(vec2(%s, %s) + vec2(%s) / vec2(tsize%d(0).xy))", x, y, off, slot);
     else sprintf(uv, "vec2(%s, %s)", x, y);
     if (dc) sprintf(call, "vec4(textureGather(t%d, %s, %s))", slot, uv, dref);
     else sprintf(call, "textureGather(t%d, %s, %d)", slot, uv, comp);
@@ -2205,6 +2219,9 @@ static const char glsl_prelude[] =
     "ivec2 isc(ivec2 c, vec4 s, vec4 rt, vec2 fc) { if (s.x == 1.0f && s.y == 1.0f) return c;"
     " if (s.xy == rt.xy && c == ivec2(floor((fc - rt.zw) / rt.xy))) return ivec2(floor(fc - rt.zw));"
     " return ivec2(floor((vec2(c) + 0.5f) * s.xy)); }\n"
+    // [XCDE] GitHub #24 frost zoom: a fragment sampling the widened presented window texture must read the centred
+    // 16:9 box, not the whole allocation (rscale[65 + slot] = per-draw box map, all zero when inactive).
+    "vec2 uvb(vec2 uv, vec4 b) { return (b.x == 0.0f && b.y == 0.0f) ? uv : uv * b.xy + b.zw; }\n"
     // half -> float by bits, not unpackHalf2x16: NVIDIA's driver recognises unpacked halves and runs some of the
     // fp32 math after them in native fp16, differently per shader, so a depth pre-pass and its colour pass (EQUAL
     // test) placed wind-animated foliage apart: black slashes / flicker (tools: notes/PLAN.md 2026-10-08)
@@ -2276,8 +2293,10 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
                "if (g >= gmap[i].x && o < gmap[i].y) return gmap[i].z + (o >> 2); } return 0xFFFFFFFFu; }\n", GMAP_MAX);
     }
     if (c->uses_rscale && stage != STAGE_VERTEX) {
-        sp(&s, "layout(std140, set = %d, binding = 18) uniform RScale { vec4 rscale[%d]; };\n", set,
-           key && key->flip_x ? 66 : 65);  // ([65]: mirror mode's render target width)
+        sp(&s, "layout(std140, set = %d, binding = 18) uniform RScale { vec4 rscale[%d]; };\n", set, 129);
+        // rows 1..64: (sc, d16) as before; [65 + unit]: the 16:9 box map for a fragment sampling the widened presented
+        // window texture (uvb, all zero when inactive); [65]: mirror mode's render target width (its draws are
+        // composites, so the box rows stay zero there).
         info->uses_rscale = true;
     }
     bool tint = stage == STAGE_FRAGMENT && !dbg && (c->omap_target & 0x7) == 0x7 && (!key || key->rt_kind[0] == 0);

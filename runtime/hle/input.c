@@ -247,6 +247,20 @@ static void recompute_pad(void) {
         }
         lt_was = lt;
     }
+    {   // [XCDE] GitHub #22: Start + Select held = the F1 quick menu (the launcher's options over the running game).
+        // Both are hidden from the game while they are held together: its own Plus menu doesn't open behind it.
+        static bool menu_combo_was;
+        bool st = host >> SDL_GAMEPAD_BUTTON_START & 1, sel = host >> SDL_GAMEPAD_BUTTON_BACK & 1;
+        if (st && sel) {
+            host &= ~((1u << SDL_GAMEPAD_BUTTON_START) | (1u << SDL_GAMEPAD_BUTTON_BACK));
+            if (!menu_combo_was && !host_test) {
+                extern void menu_open_request(void);  // runtime/ui/menu.h (headless: the stub's no-op)
+                menu_open_request();
+                LOG("[input] Start + Select: quick menu\n");
+            }
+        }
+        menu_combo_was = st && sel;
+    }
     uint64_t b = 0;
     for (int i = 0; i < BIND_PAD_COUNT; i++)
         if (g_bind_pad[i] >= 0 && g_bind_pad[i] < PADB_HOST_COUNT && (host >> g_bind_pad[i] & 1)) b |= 1ull << i;
@@ -338,6 +352,47 @@ int input_pad_family(void) {
         env = !e ? -1 : !strcmp(e, "xbox") ? 1 : !strcmp(e, "playstation") || !strcmp(e, "ps") ? 2 : 0;
     }
     return env >= 0 ? env : pad_family;
+}
+
+// [XCDE][RUMBLE] GitHub: controller vibration. nn::hid's vibration path reaches the hid service
+// (runtime/services/hid_set.c, cmds 201+), which hands the VibrationValue amplitudes here; the thread
+// that owns the SDL gamepad (renderer's event loop, device.c ui_run every <= 16 ms) applies them. The
+// HLE'd InitializeVibrationDevice / GetVibrationDeviceHandles / GetVibrationDeviceInfo stay above.
+static _Atomic uint32_t rumble_low, rumble_high;  // SDL frequencies, 0..65535
+static _Atomic uint64_t rumble_t_low, rumble_t_high;  // last offer per band: a band the sender stops
+                                                      // updating must stop rattling (GitHub #24 feedback)
+static _Atomic uint32_t rumble_seq;
+void input_rumble_offer(float low, float high) {
+    low = fmaxf(0.0f, fminf(low, 1.0f));
+    high = fmaxf(0.0f, fminf(high, 1.0f));
+    atomic_store(&rumble_low, (uint32_t)(low * 65535.0f + 0.5f));
+    atomic_store(&rumble_high, (uint32_t)(high * 65535.0f + 0.5f));
+    uint64_t now = SDL_GetTicksNS();
+    atomic_store(&rumble_t_low, now);
+    atomic_store(&rumble_t_high, now);
+    atomic_fetch_add(&rumble_seq, 1);
+}
+void input_rumble_offer_channel(int right, float amplitude) {
+    amplitude = fmaxf(0.0f, fminf(amplitude, 1.0f));
+    atomic_store(right ? &rumble_high : &rumble_low, (uint32_t)(amplitude * 65535.0f + 0.5f));
+    atomic_store(right ? &rumble_t_high : &rumble_t_low, SDL_GetTicksNS());
+    atomic_fetch_add(&rumble_seq, 1);
+}
+void input_rumble_apply(void) {
+    static uint32_t seen;
+    uint32_t s = atomic_load(&rumble_seq);
+    if (s == seen || !g_settings.input_rumble || !pad) return;
+    seen = s;
+    uint32_t l = atomic_load(&rumble_low), h = atomic_load(&rumble_high);
+    // [XCDE] GitHub #24 feedback ("se queda el mando vibrando infinitamente"): the game drives one handle
+    // and keeps spamming its zero keep-alive, so a band whose sender stopped re-sending kept its last
+    // amplitude and was re-armed forever. A band not offered for 100 ms is stale: treat it as off.
+    uint64_t now = SDL_GetTicksNS();
+    if (now - atomic_load(&rumble_t_low) > 100000000ull) l = 0;
+    if (now - atomic_load(&rumble_t_high) > 100000000ull) h = 0;
+    // The game re-sends its vibration value about every frame while a shake runs, so a short envelope
+    // keeps the pad alive and cannot leave it buzzing when a sender stops without a zero packet.
+    if (l || h) SDL_RumbleGamepad(pad, (Uint16)l, (Uint16)h, 200);
 }
 
 void input_handle_event(const SDL_Event *e) {
@@ -800,18 +855,28 @@ HLE_FUNC("_ZN2nn3hid27BindNpadStyleSetUpdateEventERKjPNS_2os15SystemEventTypeENS
 }
 
 // Vibration devices: accepted but inert (the SDK's vibration node graph stays recompiled).
-HLE_FUNC("_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE", hid_init_vibration) { (void)c; }
+// [XCDE][RUMBLE] GitHub: now instrumented — whether the game even starts the vibration pipeline.
+HLE_FUNC("_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE", hid_init_vibration) {
+    static int nlog;
+    if (nlog++ < 4) LOG("[vib] InitializeVibrationDevice handle %#x\n", *(uint32_t *)(uintptr_t)c->x[0]);
+    c->x[0] = RES_OK;  // Result: SDK's own wrapper caches it; garbage broke the internal vibration state machine
+}
 HLE_FUNC("_ZN2nn3hid25GetVibrationDeviceHandlesEPNS0_21VibrationDeviceHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE", hid_vibration_handles) {
     uint32_t *out = (uint32_t *)(uintptr_t)c->x[0];
     int n = (int)c->x[1] < 2 ? (int)c->x[1] : 2;
     uint32_t id = *(uint32_t *)(uintptr_t)c->x[2];
+    static int nlog;
+    if (nlog++ < 4) LOG("[vib] GetVibrationDeviceHandles n=%d id=%#x styles=%#x\n", n, id, (uint32_t)c->x[3]);
     for (int i = 0; i < n; i++) out[i] = (id & 0xFF) << 8 | (uint32_t)i | 0x03000000u;  // type, player, position
     c->x[0] = (uint64_t)n;
 }
 HLE_FUNC("_ZN2nn3hid22GetVibrationDeviceInfoEPNS0_19VibrationDeviceInfoERKNS0_21VibrationDeviceHandleE", hid_vibration_info) {
     uint32_t *info = (uint32_t *)(uintptr_t)c->x[0];
     uint32_t h = *(uint32_t *)(uintptr_t)c->x[1];
+    static int nlog;
+    if (nlog++ < 4) LOG("[vib] GetVibrationDeviceInfo handle %#x\n", h);
     info[0] = 1;        // VibrationDeviceType_LinearResonantActuator
     info[1] = h & 1;    // position: left / right
+    c->x[0] = RES_OK;   // Result
 }
 

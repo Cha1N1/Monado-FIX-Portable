@@ -664,6 +664,18 @@ def main():
         f.write('};\n')
         f.write(f'const uint64_t {args.name}_fn_count = {len(order)};\n')
         write_if_changed(os.path.join(args.outdir, f'{args.name}_table.c'), f.getvalue())
+    # The NSO build id this code was lifted from: the runtime (runtime/loader.c) refuses to start on a
+    # different one — other game versions' files crash far from anything localizable (GitHub #18), and the
+    # launcher (tools/launcher/launcher.cpp) reads the .h twin to warn inside the UI before starting.
+    with io.StringIO() as f:
+        f.write("// emitted by gen.py: the NSO build id this module's code was lifted from (compared at load\n"
+                "// time by runtime/loader.c: the game files of another game version are refused)\n")
+        f.write(f'const char nso_buildid_{args.name}[] = "{m.nso.build_id}";\n')
+        write_if_changed(os.path.join(args.outdir, f'{args.name}_id.c'), f.getvalue())
+    with io.StringIO() as f:
+        f.write('// emitted by gen.py: keep in sync with the *_id.c next to this (NSO build-id check)\n')
+        f.write(f'#define XCDE_GAME_{args.name.upper()}_ID "{m.nso.build_id}"\n')
+        write_if_changed(os.path.join(args.outdir, f'{args.name}_id.h'), f.getvalue())
     print(f'{args.name}: wrote {nchunks} chunks, {time.time() - t0:.0f}s total', file=sys.stderr)
 
 

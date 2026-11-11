@@ -17,6 +17,12 @@ bool rando_romfs_override(const char *path, char *out, size_t cap) { (void)path;
 void rando_boot(void) {}
 void rando_select(const char *seed) { (void)seed; }
 
+// [XCDE] GitHub #7: romfs_virtual.c asks whether the FSR 3 / DLSS jitter is active (its own temporal AA has to go
+// off then); the window build's real answer is runtime/nvn/vulkan/temporal.c. The headless boot has no temporal
+// chain: no jitter.
+bool tmp_jitter_active(void) __attribute__((weak));
+bool tmp_jitter_active(void) { return false; }
+
 // LAS-only hooks that services/fs.c calls (save editor, flag extension, romfs read hook): nothing in XCDE.
 void romfs_file_read_hook(const char *path) { (void)path; }
 void save_editor_file_read(const char *path, uint64_t addr, int64_t off, int64_t size) { (void)path; (void)addr; (void)off; (void)size; }

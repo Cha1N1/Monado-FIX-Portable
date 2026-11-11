@@ -1408,6 +1408,11 @@ static float tex_sc[2][64][2];
 static uint8_t tex_d16[2][64];  // [XCDE] T243: the texture bound to the unit is D16 (rscale[1 + unit].z: the shader rounds a
 static bool ti_d16;             // compare reference to 16 bits, as Maxwell does); ti_d16: texture_info's last answer
 static uint32_t tex_wh[2][64][2];
+static bool tex_presented[2][64];      // [XCDE] frost fix: the unit's texture is the presented (widened) window texture
+static uint32_t tex_alloc[2][64][2];   // and its (backend) allocation size, for the centred 16:9 box map
+static bool ti_presented;              // texture_info's last answer
+static uint32_t ti_alloc[2];
+static int g_draw_wide_remap;          // the wide-box classification's verdict for the current draw: 1 = non-composite
 
 // ================================================================== render passes
 static VkFormat pass_color[8], pass_depth, pass_stencil;
@@ -4996,6 +5001,8 @@ static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo
     sc[0] = sc[1] = 1;
     wh[0] = wh[1] = 0;
     ti_d16 = false;
+    ti_presented = false;
+    ti_alloc[0] = ti_alloc[1] = 0;
     if (h && st.tpool && tic < (uint32_t)st.tpool->count) {
         NvnTexEntry *e = &((NvnTexEntry *)st.tpool->entries)[tic];
         if (e->tex) {
@@ -5038,6 +5045,23 @@ static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo
             renderer_texture_scale(e->tex, &sc[0], &sc[1]);
             wh[0] = e->tex->width; wh[1] = e->tex->height;
             ti_d16 = e->tex->format == 0x32;
+            TexBackend *tb = (TexBackend *)e->tex->backend;
+            ti_presented = tb && tb->presented;
+            ti_alloc[0] = tb ? tb->width : 0;
+            ti_alloc[1] = tb ? tb->height : 0;
+            {   // [XCDE] frost-zoom diagnosis: samplings of the widened (presented, sx != sy) window texture
+                static int tw = -1;
+                if (tw < 0) tw = getenv("XCDE_TRACE_WIDE") != NULL;
+                if (tw && g_debug_frame && tb && tb->presented && sc[0] != sc[1] && stage != 0) {
+                    uint32_t lv = e->has_view && (e->view.setmask & 1) ? e->view.base_level : 0;
+                    LOG("[wsamp] stage %d fs %llx slot %d tex %ux%u alloc %ux%u sc %.3f,%.3f lvl %u rt %ux%u vp %.0f %.0f %.0f %.0f\n",
+                        stage, (unsigned long long)audit_fs(), slot, e->tex->width, e->tex->height, tb->width, tb->height,
+                        sc[0], sc[1], lv,
+                        st.rt.ncolor && st.rt.color[0] ? st.rt.color[0]->width : 0,
+                        st.rt.ncolor && st.rt.color[0] ? st.rt.color[0]->height : 0,
+                        (double)st.viewport[0][0], (double)st.viewport[0][1], (double)st.viewport[0][2], (double)st.viewport[0][3]);
+                }
+            }
             for (int k = 0; k < nfeedback; k++)
                 if (e->tex == feedback_tex[k] && (st_->type == TEXTYPE_2D || st_->type == TEXTYPE_2D_ARRAY)) {
                     view = feedback_view[k];
@@ -5111,7 +5135,7 @@ static VkDescriptorSet stage_set(Prog *p, VkDescriptorSetLayout layout, uint32_t
     VkDescriptorImageInfo ii[MAX_BIND];
     int n = 0;
     int sg = stage == 1 ? 1 : 0;
-    float rs[66][4];  // ([65]: mirror mode, renderer.m) (filled only for a binding 18: [XCDE] perf, 1 KB a set)
+    float rs[129][4];  // ([65 + unit]: per-unit 16:9 box map, [XCDE] frost fix; rows 1..64 keep (sc, d16); filled only for a binding 18)
     for (int i = 0; i < p->nbinds; i++) {
         VkBindingInfo *b = &p->binds[i];
         if (b->set != set) continue;
@@ -5121,8 +5145,8 @@ static VkDescriptorSet stage_set(Prog *p, VkDescriptorSetLayout layout, uint32_t
             int ti = (int)b->binding - 32;
             float sc[2]; uint32_t wh[2];
             if (ti < si->ntex && pre_ii && ti < 64) { ii[n] = pre_ii[ti]; sc[0] = tex_sc[sg][ti][0]; sc[1] = tex_sc[sg][ti][1]; wh[0] = tex_wh[sg][ti][0]; wh[1] = tex_wh[sg][ti][1]; }
-            else if (ti < si->ntex) { texture_info(stage, si, ti, &ii[n], sc, wh); if (ti < 64) tex_d16[sg][ti] = ti_d16; }
-            else { ii[n] = (VkDescriptorImageInfo){vk_default_sampler(true), vk_dummy_view(TEXTYPE_2D), VK_IMAGE_LAYOUT_GENERAL}; sc[0] = sc[1] = 1; wh[0] = wh[1] = 0; if (ti < 64) tex_d16[sg][ti] = 0; }
+            else if (ti < si->ntex) { texture_info(stage, si, ti, &ii[n], sc, wh); if (ti < 64) { tex_d16[sg][ti] = ti_d16; tex_presented[sg][ti] = ti_presented; tex_alloc[sg][ti][0] = ti_alloc[0]; tex_alloc[sg][ti][1] = ti_alloc[1]; } }
+            else { ii[n] = (VkDescriptorImageInfo){vk_default_sampler(true), vk_dummy_view(TEXTYPE_2D), VK_IMAGE_LAYOUT_GENERAL}; sc[0] = sc[1] = 1; wh[0] = wh[1] = 0; if (ti < 64) { tex_d16[sg][ti] = 0; tex_presented[sg][ti] = 0; } }
             if (ti < 64) {
                 tex_sc[sg][ti][0] = sc[0]; tex_sc[sg][ti][1] = sc[1];
                 tex_wh[sg][ti][0] = wh[0]; tex_wh[sg][ti][1] = wh[1];
@@ -5133,7 +5157,7 @@ static VkDescriptorSet stage_set(Prog *p, VkDescriptorSetLayout layout, uint32_t
             float sc[2] = {1, 1};
             ii[n] = (VkDescriptorImageInfo){VK_NULL_HANDLE, ti < si->ntex ? storage_view_for(stage, si, ti, sc) : vk_dummy_storage_view(),
                                             VK_IMAGE_LAYOUT_GENERAL};
-            if (ti < 64) { tex_sc[sg][ti][0] = sc[0]; tex_sc[sg][ti][1] = sc[1]; tex_d16[sg][ti] = 0; }  // [XCDE] T178
+            if (ti < 64) { tex_sc[sg][ti][0] = sc[0]; tex_sc[sg][ti][1] = sc[1]; tex_d16[sg][ti] = 0; tex_presented[sg][ti] = 0; }  // [XCDE] T178
             w[n].pImageInfo = &ii[n];
         } else if (b->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER && b->binding < 17) {
             bi[n] = cbuf_info(stage, si, (int)b->binding, gx, gy, gz);
@@ -5160,8 +5184,22 @@ static VkDescriptorSet stage_set(Prog *p, VkDescriptorSetLayout layout, uint32_t
             memset(rs, 0, sizeof rs);
             rs[0][0] = rs[0][1] = 1;
             if (rscale_row0) memcpy(rs[0], rscale_row0, 16);
-            rs[65][0] = g_mirror_w;
-            for (int t = 0; t < si->ntex && t < 64; t++) { rs[1 + t][0] = tex_sc[sg][t][0]; rs[1 + t][1] = tex_sc[sg][t][1]; rs[1 + t][2] = tex_d16[sg][t]; }
+            for (int t = 0; t < si->ntex && t < 64; t++) {
+                rs[1 + t][0] = tex_sc[sg][t][0]; rs[1 + t][1] = tex_sc[sg][t][1]; rs[1 + t][2] = tex_d16[sg][t];
+                // [XCDE] GitHub #24 frost zoom: a non-composite draw sampling the widened presented window texture reads
+                // the centred 16:9 box, not the whole allocation (uvb in the shader: uv * rs.xy + rs.zw, no-op when 0).
+                if (stage == 1 && g_draw_wide_remap && tex_presented[sg][t] &&
+                    tex_sc[sg][t][0] != tex_sc[sg][t][1] && tex_alloc[sg][t][0] && tex_alloc[sg][t][1]) {
+                    float u = fminf(tex_sc[sg][t][0], tex_sc[sg][t][1]);
+                    float aw = (float)tex_alloc[sg][t][0], ah = (float)tex_alloc[sg][t][1];
+                    rs[65 + t][0] = (float)tex_wh[sg][t][0] * u / aw;
+                    rs[65 + t][1] = (float)tex_wh[sg][t][1] * u / ah;
+                    rs[65 + t][2] = (aw - (float)tex_wh[sg][t][0] * u) * 0.5f / aw;
+                    rs[65 + t][3] = (ah - (float)tex_wh[sg][t][1] * u) * 0.5f / ah;
+                }
+            }
+            if (g_mirror_w && !(stage == 1 && g_draw_wide_remap && tex_presented[sg][0] && tex_sc[sg][0][0] != tex_sc[sg][0][1]))
+                rs[65][0] = g_mirror_w;  // (mirror mode's composite: rscale[65].x = width; its draws are composites, so the box rows are inactive)
             bi[n] = ubo_span(copy_dedupe(sg ? DEDUPE_RSCALE_F : DEDUPE_RSCALE_V, rs, sizeof rs, 256), sizeof rs);
         } else {
             float zero[8] = {0};
@@ -5311,6 +5349,7 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
         LOG("\n");
     }
     if (cp->si->uses_gmem_map) gfast_prepare(cb);
+    g_draw_wide_remap = 0;  // [XCDE] frost fix: compute dispatches have no wide-box verdict (and don't read the box rows)
     VkDescriptorSet ds = stage_set(&cp->p, cp->p.set_layout[0], 0, 5, cp->si, NULL, NULL, gx, gy, gz, NULL);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, cp->pipe);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, cp->p.layout, 0, 1, &ds, 0, NULL);
@@ -5449,14 +5488,31 @@ static void tmp_draw(const Prog *pr, float *jx, float *jy) {
                                                           st.rt.depth->height == tmp_depth_tex->height));
     // [XCDE] T213: nothing after the frame's scene composite (the HUD draws with a depth buffer of the scene's size:
     // it was jittered too - the HUD shook once the HUD mask showed it unblended)
-    if (scene && st.ds[0] && !nojit && !tmp_hud_started()) { *jx = tmp_jit[0]; *jy = tmp_jit[1]; tmp_scene_frame = fr; }
+    // [XCDE] T260: world geometry drawn WITHOUT the depth test (sky, water, particles, some effects) was never jittered,
+    // but the upscaler removes the jitter from the whole image: those pixels shook / flickered. A draw that reads the scene
+    // camera's constant buffer is world geometry whatever its depth state (a fullscreen post pass does not read it).
+    // XCDE_TMP_JIT_NODEPTH=0 restores the old rule (depth-tested draws only).
+    bool world = st.ds[0] != 0;
+    if (scene && !world) {
+        static int nodepth = -1;
+        if (nodepth < 0) { const char *e = getenv("XCDE_TMP_JIT_NODEPTH"); nodepth = !(e && *e == '0'); }
+        if (nodepth) {
+            TmpCamera scratch;
+            for (int k = 0; k < 14 && !world; k++) {
+                const Range *u = &st.ubuf[0][k];
+                if (u->addr < HEAP_BASE || u->size < 176) continue;
+                world = tmp_cam_check((const float *)(uintptr_t)u->addr, &scratch);
+            }
+        }
+    }
+    if (scene && world && !nojit && !tmp_hud_started()) { *jx = tmp_jit[0]; *jy = tmp_jit[1]; tmp_scene_frame = fr; }
     if (getenv("XCDE_TMP_LOG")) {  // (debugging) per frame: draws jittered / scene draws not jittered (after the HUD began) / others
         static uint64_t fr; static int nj, nh, no, nl;
         if (fr != renderer_present_count()) {
             if (fr && nl < 12 && (fr % 60) == 0) { nl++; LOG("[tmp] frame %llu: %d draws jittered, %d scene draws after the HUD began (not jittered), %d others\n", (unsigned long long)fr, nj, nh, no); }
             fr = renderer_present_count(); nj = nh = no = 0;
         }
-        if (scene && st.ds[0]) { if (tmp_hud_started()) nh++; else nj++; } else no++;
+        if (scene && world) { if (tmp_hud_started()) nh++; else nj++; } else no++;
     }
 }
 
@@ -5960,6 +6016,7 @@ static void draw_(CmdRec *r, bool indexed) {
     }
     PROF_T0();
     VkDescriptorSet vset = stage_set(pr, pr->set_layout[0], 0, 0, pr->vi, NULL, NULL, 0, 0, 0, NULL);
+    g_draw_wide_remap = 0;  // [XCDE] frost fix: the wide-box classification below decides (fragment set is built after it)
     PROF_ADD(prof_sets);
     VkDescriptorImageInfo fii[64];
     uint64_t prof_tx_ = prof ? SDL_GetTicksNS() : 0;
@@ -5967,19 +6024,38 @@ static void draw_(CmdRec *r, bool indexed) {
         float sc[2]; uint32_t wh[2];
         texture_info(1, pr->fi, i, &fii[i], sc, wh);
         tex_sc[1][i][0] = sc[0]; tex_sc[1][i][1] = sc[1]; tex_wh[1][i][0] = wh[0]; tex_wh[1][i][1] = wh[1]; tex_d16[1][i] = ti_d16;
+        tex_presented[1][i] = ti_presented; tex_alloc[1][i][0] = ti_alloc[0]; tex_alloc[1][i][1] = ti_alloc[1];
     }
     if (prof) prof_tex += SDL_GetTicksNS() - prof_tx_;
-    if (fabsf(pass_sx - pass_sy) > 0.01f * pass_sy && st.rt.ncolor && renderer_texture_presented(st.rt.color[0])) {
+    {   // static: [XCDE] test toggle - the old behaviour with XCDE_UI_STRETCH=1 (every draw fills the window, UI stretches)
+        static int ui_stretch = -1;
+        if (ui_stretch < 0) ui_stretch = getenv("XCDE_UI_STRETCH") != NULL;
+        if (!ui_stretch && fabsf(pass_sx - pass_sy) > 0.01f * pass_sy && st.rt.ncolor &&
+            renderer_texture_presented(st.rt.color[0])) {
         // Draws into the swapchain image (see renderer.m): composites fill the window, UI goes in a centred 16:9 box.
-        bool reads_scene = false;
+        // [XCDE] GitHub #24/#22 feedback: the mapping must not vary per element - every non-fullscreen draw is a UI
+        // piece (the frosted panels sample the same blurred copy but stay UI pieces, as renderer.m says) and now all
+        // of them use the same centred box, so their positions keep the Switch's geometry on any aspect ratio.
+        bool scene_read = false;  // samples a reshaped texture the size of the framebuffer (the scene itself)
         for (int i = 0; i < pr->fi->ntex && i < 64; i++)
             if ((tex_sc[1][i][0] != 1 || tex_sc[1][i][1] != 1) && tex_wh[1][i][0] == st.rt.color[0]->width &&
                 tex_wh[1][i][1] == st.rt.color[0]->height)
-                reads_scene = true;
+                scene_read = true;
         bool fullscreen_quad = r->x[2] <= 6 && st.viewport[0][0] == 0 && st.viewport[0][1] == 0 &&
                                st.viewport[0][2] >= st.rt.color[0]->width && st.viewport[0][3] >= st.rt.color[0]->height;
+        // Only a full-target quad is allowed to fill the window; every other draw (panels, bars, menus) keeps the box.
+        bool reads_scene = fullscreen_quad && scene_read;
         bool fullscreen_fill = pr->fi->ntex == 0 && fullscreen_quad;
         if (fullscreen_quad && !reads_scene && pr->fi->ntex == 1 && (tex_sc[1][0][0] != 1 || tex_sc[1][0][1] != 1)) reads_scene = true;
+        // [XCDE] V9: a full-target pass into the window that samples ANY scene-scaled texture is a composite of the scene
+        // even when none of its textures has exactly the window texture's size (post effects that read a smaller or
+        // differently sized copy of the scene). Before, such a pass was shrunk into the centred 16:9 box: black bars while
+        // the effect ran (e.g. while the camera moves).
+        bool v9_relaxed = false;
+        if (fullscreen_quad && !reads_scene && pr->fi->ntex > 1) {
+            for (int i = 0; i < pr->fi->ntex && i < 64; i++)
+                if (tex_sc[1][i][0] != 1 || tex_sc[1][i][1] != 1) { reads_scene = true; v9_relaxed = true; break; }
+        }
         static uint64_t wide_frame = ~0ull;
         if (reads_scene) wide_frame = renderer_present_count();
         bool fade_fill = false;
@@ -5990,6 +6066,24 @@ static void draw_(CmdRec *r, bool indexed) {
         }
         bool composite = reads_scene || fade_fill || (fullscreen_fill && wide_frame == renderer_present_count());
         if (!composite) wide_frame = ~0ull;
+        g_draw_wide_remap = !composite;  // [XCDE] frost fix: non-composite draws read the 16:9 box of the window texture
+        if ((v9_relaxed || (!composite && fullscreen_quad)) && !getenv("XCDE_NO_WIDE_LOG")) {
+            // [XCDE] V9 diagnostic ("[wide-box]" in last_game.log): one line per distinct fragment shader, at most 80
+            static uint64_t seen_fs[96];
+            static int nseen;
+            uint64_t fsh = st.program->stages[1].code_hash;
+            bool known = false;
+            for (int i = 0; i < nseen; i++) if (seen_fs[i] == fsh) { known = true; break; }
+            if (!known && nseen < 80) {
+                seen_fs[nseen++] = fsh;
+                LOG("[wide-box] %s: fs %016llx ntex %d rt %ux%u vp %.0f %.0f %.0f %.0f pass %.3f %.3f tex0 sc %.3f,%.3f wh %ux%u\n",
+                    v9_relaxed ? "now a composite (fills the window)" : "fullscreen quad kept in the 16:9 box",
+                    (unsigned long long)fsh, (int)pr->fi->ntex, (unsigned)st.rt.color[0]->width, (unsigned)st.rt.color[0]->height,
+                    (double)st.viewport[0][0], (double)st.viewport[0][1], (double)st.viewport[0][2], (double)st.viewport[0][3],
+                    (double)pass_sx, (double)pass_sy, (double)tex_sc[1][0][0], (double)tex_sc[1][0][1],
+                    (unsigned)tex_wh[1][0][0], (unsigned)tex_wh[1][0][1]);
+            }
+        }
         if (!composite) {
             int pw, ph;
             pass_size(&pw, &ph);
@@ -5998,6 +6092,7 @@ static void draw_(CmdRec *r, bool indexed) {
             vp_ox = (pw - st.rt.color[0]->width * u) * 0.5f;
             vp_oy = (ph - st.rt.color[0]->height * u) * 0.5f;
         }
+        }  // (if !ui_stretch ...)
     }
     float jx = 0, jy = 0;
     if (tmp_enabled()) tmp_draw(pr, &jx, &jy);  // [XCDE] temporal upscaling: the camera, the scene depth, jitter

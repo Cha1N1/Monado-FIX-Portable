@@ -1183,6 +1183,7 @@ int ui_run(void) {
             if (menu_handle_event(&e)) continue;
             input_handle_event(&e);
         }
+        input_rumble_apply();  // [XCDE][RUMBLE] every <= 16 ms: applies offered vibration to the gamepad
         menu_apply_window_requests(window);
         int w, h;
         SDL_GetWindowSizeInPixels(window, &w, &h);

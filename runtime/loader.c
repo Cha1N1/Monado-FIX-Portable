@@ -49,10 +49,45 @@ static uint8_t *read_file(const char *path, size_t *len) {
     return p;
 }
 
+// (matching gen.py's stored form: the header's 64 hex chars minus the trailing zero bytes)
+static void id_of(const uint8_t *hdr, char got[65]) {
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < 32; i++) {
+        got[2 * i] = hex[hdr[0x40 + i] >> 4];
+        got[2 * i + 1] = hex[hdr[0x40 + i] & 15];
+    }
+    got[64] = 0;
+    for (int l = 64; l >= 2 && got[l - 1] == '0' && got[l - 2] == '0'; l -= 2) got[l - 2] = 0;
+}
+
+// The game NSO revision the generated code was lifted from: generated/{main,sdk}/*_id.c carry the build
+// id of the NSO they were made from (tools/lifter/gen.py). A different game version's files don't work on
+// these function tables — the game crashes far from anything localizable (GitHub #18: their nn::init::Start
+// called a function no table here has, right after the applet setup). Checkouts whose generated code
+// predates the id files skip the check (the weak externs are NULL there).
+static void verify_build_id(const Module *m, const uint8_t *hdr) {
+    extern const char nso_buildid_main[] __attribute__((weak));
+    extern const char nso_buildid_sdk[] __attribute__((weak));
+    const char *want;
+    if (!strcmp(m->name, "main")) want = (const char *)&nso_buildid_main[0];
+    else if (!strcmp(m->name, "sdk")) want = (const char *)&nso_buildid_sdk[0];
+    else return;
+    if (!want) return;  // (no id files in this checkout: no check)
+    char got[65];
+    id_of(hdr, got);
+    if (!memcmp(got, want, strlen(want) / 2 * 2)) return;
+    FATAL("targets/exefs/%s is from another game update: its NSO build id is %s, but this program was compiled\n"
+          "for the one with build id %s. Other game versions' files can't work here (the recompiled code only\n"
+          "matches one version). Restore THIS PACKAGE's own targets/exefs (or dump that exact game version) and\n"
+          "start again. [launcher note: the launcher blocks launching with a clear message instead of this.]\n",
+          m->name, got, want);
+}
+
 static void load_nso(Module *m, const char *path, uint64_t base) {
     size_t len;
     uint8_t *raw = read_file(path, &len);
     if (!raw || memcmp(raw, "NSO0", 4)) FATAL("cannot load %s\n", path);
+    verify_build_id(m, raw);  // (before anything else: a wrong game version fails here with a clear reason)
     uint32_t flags = *(uint32_t *)(raw + 0xC);
     uint32_t seg[3][3];  // file_off, mem_off, size
     for (int i = 0; i < 3; i++) memcpy(seg[i], raw + 0x10 + i * 0x10, 12);

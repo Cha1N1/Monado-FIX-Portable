@@ -219,6 +219,20 @@ static void drop_follow_move(Cpu *c, uint64_t pm, uint32_t handle) {
     if (*invoker == FOLLOW_MOVE_INVOKER) *invoker = 0;
 }
 
+// [XCDE][party] GitHub #17: is a cutscene (or a video) playing right now? The three signals the debugger tour
+// waits on, any one counting (each alone misses some scenes: a zone's intro flyover, an FMV after a scene, ...).
+// xcde_in_cutscene's streak filter is "once a frame": sampled on the first call of each pad read (frame) and
+// reused after, so callers in the same frame don't advance it twice.
+static bool cutscene_playing(uint64_t frame) {
+    extern bool xcde_movie_playing(void), xcde_in_cutscene(void);
+    static uint64_t sampled_at;
+    static bool in;
+    if (frame != sampled_at) { sampled_at = frame; in = xcde_in_cutscene(); }
+    uint64_t emgr = *(volatile uint64_t *)(uintptr_t)*(volatile uint64_t *)(uintptr_t)0x7000b90f40ull;
+    for (int k = 0; emgr && k < 4; k++) if (*(volatile uint64_t *)(uintptr_t)(emgr + 0xd8 + k * 0x60)) return true;
+    return in || xcde_movie_playing();
+}
+
 // A switch at any other time than with the player in control is ignored (the menu would keep showing the old leader;
 // loading screens have no party yet).
 static bool player_in_control(uint64_t p) {
@@ -235,17 +249,29 @@ static bool player_in_control(uint64_t p) {
     return true;
 }
 
-static void switch_leader(Cpu *c, int step) {
+// Runs the switch. Returns false when the request must wait and be tried again on a later frame (GitHub #17:
+// a switch pressed while a cutscene plays rebuilt the party mid-scene — the game's objects half-built — and
+// closed the game): scenes defer, the switch runs as soon as the scene is over (the pending step stays set).
+static bool switch_leader(Cpu *c, int step, uint64_t frame) {
     static Found f;
     found_get(&f);
     uint64_t fo = found_one(&f, K_FIELD);
-    if (!fo) { LOG("[party] not ready yet\n"); return; }
-    if (!player_in_control(found_one(&f, K_PLAYER))) { LOG("[party] not now (menu / cutscene / loading)\n"); return; }
+    if (!fo) { LOG("[party] not ready yet\n"); return false; }  // (the scanner's first scan: wait for it)
+    static uint64_t scene_told;  // (a waiting switch is logged once every 4 s, not once a frame)
+    if (cutscene_playing(frame)) {
+        if (frame - scene_told >= 240)
+            scene_told = frame, LOG("[party] a cutscene is playing: the switch waits until it is over\n");
+        return false;
+    }
+    if (!player_in_control(found_one(&f, K_PLAYER))) {
+        LOG("[party] not now (menu / loading)\n");  // (a press made outside the game: dropped, as before)
+        return true;
+    }
     uint64_t list = call_guest(c, PARTY_LIST_FN, fo + 0x20, 0);
-    if (!list) return;
+    if (!list) return false;  // (transient: the party list object not ready - wait for it)
     uint16_t *ids = (uint16_t *)(uintptr_t)list;
     uint64_t n = *(uint64_t *)(uintptr_t)(list + 0x18);
-    if (n < 2 || n > 16) { LOG("[party] %llu member(s): no switch\n", (unsigned long long)n); return; }
+    if (n < 2 || n > 16) { LOG("[party] %llu member(s): no switch\n", (unsigned long long)n); return true; }
     // the list holds the whole roster: the deployed party (the first 3 - the Party menu's slots 1-2-3) and then the
     // reserve. Only the deployed ones take turns (as in Xenoblade 3); the reserve stays as it is.
     uint64_t total = n;
@@ -253,7 +279,7 @@ static void switch_leader(Cpu *c, int step) {
     uint64_t hud = found_one(&f, K_HUD);
     bool battle = hud && *(volatile uint64_t *)(uintptr_t)(hud + 0x2c0);  // (the HUD's battle part is set up)
     uint64_t group = field_group(c, fo + 0x20);
-    if (!group) { LOG("[party] no field group\n"); return; }
+    if (!group) { LOG("[party] no field group\n"); return false; }  // (transient: wait for the scan)
     // the next member able to fight leads (in battle a member at 0 HP is skipped, as Xenoblade 3 does); the order of the
     // others is kept (the list rotated left)
     uint16_t old[3];
@@ -272,11 +298,11 @@ static void switch_leader(Cpu *c, int step) {
         }
         k = cand;
     }
-    if (!k) { LOG("[party] nobody to switch to\n"); return; }
+    if (!k) { LOG("[party] nobody to switch to\n"); return true; }
     uint32_t handles[3];
     for (uint64_t i = 0; i < n; i++) {
         handles[i] = member_handle(c, fo + 0x20, old[(i + k) % n]);
-        if (!handles[i]) { LOG("[party] member %u has no entity\n", old[(i + k) % n]); return; }
+        if (!handles[i]) { LOG("[party] member %u has no entity\n", old[(i + k) % n]); return true; }
     }
     uint32_t handle = handles[0];
     for (uint64_t i = 0; i < n; i++) ids[i] = old[(i + k) % n];
@@ -292,6 +318,7 @@ static void switch_leader(Cpu *c, int step) {
         // arts palette and portraits for that character (f_700054fbe0) and clears the bit
         *(volatile uint8_t *)(uintptr_t)(hud + 0x330) |= 2;
     }
+    return true;
 }
 
 // (tests) Each deployed member's position: field group slot i -> entity handle -> its object (f_700049f8c0, as the game
@@ -665,18 +692,12 @@ static void debug_tour(Cpu *c, uint64_t frame) {
         }
     }
     if (!nline) return;
-    // an event or a video running: the event manager's current event (+0xd8, 0 when none; +0x100 its state, 4 while
-    // it plays - found comparing the manager idle and inside vs01040100; the framepace cutscene detector misses some
-    // scenes), or a video decoder alive (FMV events such as vs01000000 leave +0xd8 at 0). Each alone missed a scene
-    // (vs01050100 played after a long cutscene left +0xd8 at 0): any of them counts, the framepace detector too.
-    extern bool xcde_movie_playing(void), xcde_in_cutscene(void);
+    // an event or a video running (GitHub #17's detector, cutscene_playing: the framepace cutscene state, the event
+    // manager's event slots from +0xd8 - +0x100 its state, 4 while it plays, found comparing the manager idle and
+    // inside vs01040100 - and a video decoder alive (FMV events such as vs01000000 leave +0xd8 at 0); each signal
+    // alone missed a scene (vs01050100 played after a long cutscene left +0xd8 at 0): any of them counts)
     uint64_t emgr = *(volatile uint64_t *)(uintptr_t)*(volatile uint64_t *)(uintptr_t)0x7000b90f40ull;
-    bool in_cut = xcde_in_cutscene();  // (stateful: called once a frame, here)
-    // (the manager holds events in slots of 0x60 bytes from +0xd8, the event object first: vs01040100 played in slot 0,
-    // vs01050100 after it in slot 1 at +0x138; each is cleared when its event ends)
-    bool slot = false;
-    for (int k = 0; emgr && k < 4; k++) slot |= *(volatile uint64_t *)(uintptr_t)(emgr + 0xd8 + k * 0x60) != 0;
-    bool playing = in_cut || xcde_movie_playing() || slot;
+    bool playing = cutscene_playing(frame);
     // (bit 0: A, every 1.5 s, also in cutscenes: their text boxes wait for it - vs01110100 and the field talk after a
     // landmark held both tours for an hour; A advances text, it doesn't skip a scene)
     g_tour_buttons = frame % 90 < 4 ? 1 : 0;
@@ -906,5 +927,5 @@ void party_game_tick(Cpu *c, uint64_t frame) {
     int step = g_switch_req;
     if (!step) return;
     g_switch_req = 0;
-    switch_leader(c, step);
+    if (!switch_leader(c, step, frame)) g_switch_req = step;  // (a scene holds it: retry on a later frame)
 }

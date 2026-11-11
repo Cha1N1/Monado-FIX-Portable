@@ -175,7 +175,7 @@ static void fg_frame(VkCommandBuffer cb, bool enabled, const TmpCamera *cam, con
         p.frameTimeDelta = dt;
         p.unused_reset = reset;
         p.cameraNear = fabsf(cam->proj[11]) * 0.5f;
-        p.cameraFar = 1e6f;
+        p.cameraFar = FLT_MAX;
         p.cameraFovAngleVertical = cam->proj[5] != 0 ? 2.0f * atanf(1.0f / fabsf(cam->proj[5])) : 0.785f;
         p.viewSpaceToMetersFactor = 1.0f;
         p.depth = res(&img[2], FFX_API_SURFACE_FORMAT_R32_FLOAT, FFX_API_RESOURCE_USAGE_READ_ONLY);

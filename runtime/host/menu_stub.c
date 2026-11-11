@@ -5,4 +5,5 @@ bool menu_is_open(void) { return false; }
 void menu_apply_window_requests(void *w) { (void)w; }
 void menu_render(void *cmd, uint32_t w, uint32_t h) { (void)cmd; (void)w; (void)h; }
 void menu_test_open(void) {}
+void menu_open_request(void) {}
 void menu_fps_tick(uint64_t now_ns) { (void)now_ns; }

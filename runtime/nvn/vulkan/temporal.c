@@ -98,6 +98,7 @@ static float halton(uint32_t i, uint32_t b) {
     for (; i; i /= b) { f /= (float)b; r += f * (float)(i % b); }
     return r;
 }
+bool tmp_jitter_active(void) { return env_int("XCDE_TMP_JIT_FORCE") != 0; }  // (romfs_virtual.c queries: the game's own AA may stay on when no jitter)
 void tmp_jitter(float j[2]) {
     static int decide = -1;  // 1 = produce a Halton jitter, 0 = images are drawn unjittered
     if (decide < 0) {
@@ -106,12 +107,12 @@ void tmp_jitter(float j[2]) {
         // FSR 3 / DLSS accumulation flickers the whole image and none of the declared-jitterOffset sign flips helped
         // (XCDE_TMP_JIT_SIGN 1/2/3: every one of them brought the flicker back), while both at zero are steady
         // (XCDE_TMP_NOJITTER=1, the diagnostics bat's option 11) - and it also took the right-edge vertical line with
-        // it. The scene never cancels the declared offset underneath us (romfs_virtual.c: the game's own TAA is off
-        // for FSR 3/DLSS), so the mismatch is in what the upscaler undoes vs what the draws did; until that
-        // convention is found, no jitter is the only stable configuration. The AntiAliasing cost is a little more
-        // edge aliasing; XCDE_TMP_JIT_FORCE=1 brings the Halton jitter back on any GPU to compare.
+        // it. The scene never cancels the declared offset underneath us, so the mismatch is in what the upscaler undoes
+        // vs what the draws did; until that convention is found, no jitter is the only stable configuration. The
+        // AntiAliasing cost is a little more edge aliasing; XCDE_TMP_JIT_FORCE=1 brings the Halton jitter back on any
+        // GPU to compare. (GitHub #7: with the jitter off, the game's own temporal AA may stay on - romfs_virtual.c)
         (void)e;
-        decide = env_int("XCDE_TMP_JIT_FORCE") != 0;
+        decide = tmp_jitter_active();
     }
     if (!decide) { j[0] = j[1] = 0; return; }
     jit_index = jit_index % jit_phases + 1;
