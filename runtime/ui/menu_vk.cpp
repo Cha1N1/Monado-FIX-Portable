@@ -348,6 +348,12 @@ static void ui(void) {
             int occl = g_settings.occlusion == OCCL_OFF ? 1 : g_settings.occlusion == OCCL_ON ? 2 : 0;
             if (monado_combo(T("Culling por oclusión (al reiniciar)"), &occl, TL(occl_modes, 3).p, 3))
                 g_settings.occlusion = occl == 1 ? OCCL_OFF : occl == 2 ? OCCL_ON : OCCL_AUTO;
+            // [XCDE] issue #7: confirmed on RDNA 3 (RX 7800 XT and Ryzen 8600G iGPU); automatic engages the
+            // feedback-snapshot path only there (see LARECOMP_FEEDBACK_DIRECT handling in exec.c).
+            static const char *amd_modes[] = {"Automático (RDNA 3: activado)", "Desactivado", "Activado"};
+            int amdfix = g_settings.amd_fix == AMD_FIX_OFF ? 1 : g_settings.amd_fix == AMD_FIX_ON ? 2 : 0;
+            if (monado_combo(T("Fix de parpadeo AMD (al reiniciar)"), &amdfix, TL(amd_modes, 3).p, 3))
+                g_settings.amd_fix = amdfix == 1 ? AMD_FIX_OFF : amdfix == 2 ? AMD_FIX_ON : AMD_FIX_AUTO;
             ImGui::Checkbox(T("Presupuesto de memoria Vulkan"), &g_settings.gpu_memory_budget);
             ImGui::TextDisabled(T("Estos cambios requieren reiniciar el juego."));
             ImGui::EndTabItem();

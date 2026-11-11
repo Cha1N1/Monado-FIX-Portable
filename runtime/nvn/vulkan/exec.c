@@ -4140,7 +4140,20 @@ static void resolve_feedback(Prog *pr) {
             static int direct = -1;
             // T252 made snapshots the default on every vendor. [PERF-V5] the direct path (V4 behaviour, +16 % in battle) is the
             // default again on ALL vendors. LARECOMP_FEEDBACK_DIRECT=0 brings the snapshots back (if blue textures / flicker appear).
-            if (direct < 0) { const char *e = getenv("LARECOMP_FEEDBACK_DIRECT"); direct = !e || atoi(e) != 0; }
+            // [XCDE] issue #7: 1 = amd_fix auto turns the snapshots on for AMD RDNA 3 (the one lever the tester
+            // confirmed: LARECOMP_FEEDBACK_DIRECT=0 fixes the 1-2 px colour dots). 0 = auto leaves everything as
+            // it was; the launcher/menu toggle still works. GPL-off is NOT touched here (device lost, Test 1).
+            #define AMD_FIX_AUTO_RDNA3 1
+            if (direct < 0) {
+                const char *e = getenv("LARECOMP_FEEDBACK_DIRECT");
+                if (e) direct = atoi(e) != 0;                            // diagnostics: env wins
+                else if (g_settings.amd_fix == AMD_FIX_ON) direct = 0;   // amd_fix = on
+                else if (g_settings.amd_fix == AMD_FIX_OFF) direct = 1;  // amd_fix = off
+                else {                                                   // automatic
+                    direct = !(vk_amd_rdna3() && AMD_FIX_AUTO_RDNA3);
+                    if (!direct) LOG("[vk] AMD RDNA 3: feedback snapshots (amd_fix=auto, GitHub #7)\n");
+                }
+            }
             if (direct && t != st.rt.depth) continue;
             bool have = false;
             for (int k = 0; k < nfeedback; k++) have |= feedback_tex[k] == t;

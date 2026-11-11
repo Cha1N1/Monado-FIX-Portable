@@ -100,6 +100,7 @@ struct Cfg {
     unsigned effects_off=0;
     int gpu_profile = 0, gpu_gpl = -1;
     int occlusion = -1;     // [XCDE][FSR3] -1 automatic (off on AMD iGPUs), 0 off, 1 on (xcde.ini occlusion)
+    int amd_fix = -1;       // issue #7: -1 automatic (on for AMD RDNA 3), 0 off, 1 on (xcde.ini amd_fix)
     bool gpu_memory_budget = true, gpu_performance = false, gpu_keep_heavy = false;
     bool fullscreen = false;
     int aspect = ASPECT_UNLOCKED;
@@ -414,6 +415,7 @@ static void load() {
         else if (!strcmp(k, "gpu_gpl")) g.gpu_gpl = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
         else if (!strcmp(k, "gpu_memory_budget")) g.gpu_memory_budget = atoi(v) != 0;
         else if (!strcmp(k, "occlusion")) g.occlusion = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
+        else if (!strcmp(k, "amd_fix")) g.amd_fix = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
         else if (!strcmp(k, "rumble")) g.rumble = atoi(v) != 0;
         else if (!strcmp(k, "gpu_preset")) { g.quality_preset=xcde_quality_parse(v); g.gpu_performance=g.quality_preset==QUALITY_PERFORMANCE || g.quality_preset==QUALITY_POTATO; }
         else if (!strcmp(k, "low_memory")) g.gpu_performance=atoi(v)!=0;
@@ -455,6 +457,7 @@ static bool save() {
         g.gpu_uuid, g.gpu_index, g.gpu_profile ? "compatibility" : "auto", g.gpu_gpl < 0 ? "auto" : g.gpu_gpl ? "on" : "off",
         g.gpu_memory_budget, xcde_quality_name(g.quality_preset), g.gpu_keep_heavy);
     fprintf(f, "occlusion = %s\n", g.occlusion == 1 ? "on" : g.occlusion == 0 ? "off" : "auto");
+    fprintf(f, "amd_fix = %s\n", g.amd_fix == 1 ? "on" : g.amd_fix == 0 ? "off" : "auto");
     fprintf(f,"low_memory = %d\ndynamic_min_height = %d\ndynamic_max_height = %d\neffects_off = %u\n",g.gpu_performance,g.dynamic_min_height,g.dynamic_max_height,g.effects_off);
     fprintf(f, "fullscreen = %d\nwindow = %s\nresolution = %s\nupscaler = %s\nantialias = %s\nshow_fps = %d\n", g.fullscreen,
             k_wins[g.win], k_res_ini[g.res], g.upscaler_auto ? "auto" : k_ups_ini[g.upscaler], g.smaa ? "smaa" : "off", g.show_fps);
@@ -852,6 +855,16 @@ static void tab_graphics() {
             g.occlusion = occl == 1 ? 0 : occl == 2 ? 1 : -1;
         ImGui::SetItemTooltip(T("Resuelve lo que se ve tras el suelo / el suelo que desaparece con FSR 3 en algunas GPUs.\n"
                                 "Automático: solo lo apaga en las gráficas integradas AMD donde falla."));
+    }
+    {   // [XCDE] issue #7: confirmed on RDNA 3 (RX 7800 XT and Ryzen 8600G iGPU).
+        static const char *amd_ui[] = {"Automático (RDNA 3: activado)", "Desactivado", "Activado"};
+        static const char *amd_en[] = {"Automatic (RDNA 3: on)", "Off", "On"};
+        int fix = g.amd_fix == 0 ? 1 : g.amd_fix == 1 ? 2 : 0;
+        if (monado_combo(g.ui_lang ? "Fix de parpadeo AMD (al reiniciar)" : "AMD flicker fix (restart)",
+                         &fix, g.ui_lang ? amd_en : amd_ui, 3))
+            g.amd_fix = fix == 1 ? 0 : fix == 2 ? 1 : -1;
+        ImGui::SetItemTooltip(T("Puntos de color de 1-2 px en gráficas AMD RDNA 3 (issue #7).\n"
+                                "Automático: solo se activa en RDNA 3. Desactivado si te baja el rendimiento."));
     }
     ImGui::TextDisabled(g.ui_lang ? "GPU changes apply on next launch." : "Los cambios GPU se aplican al iniciar el juego.");
     }

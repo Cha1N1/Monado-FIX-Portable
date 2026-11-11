@@ -129,6 +129,9 @@ typedef struct TexBackend {
 
 TexBackend *vk_tex(NvnTexture *t, bool for_render);  // backend image (uploads CPU contents unless for_render)
 void vk_texture_gone(NvnTexture *t);  // [XCDE] issue #25: drop snapshot caches for a freed texture
+// [XCDE] issue #7: AMD RDNA 3 only (Navi 31/32/33 + Phoenix1/Phoenix2 iGPUs).
+// Everything else (RDNA 1/2/4, Vega, NVIDIA, Intel) returns false.
+bool vk_amd_rdna3(void);
 bool vk_tex_add_storage(NvnTexture *t, VkCommandBuffer cb);  // [XCDE] T192 (textures.c)
 VkFormat vk_format(uint32_t nvn_format);
 bool vk_format_alpha_one(uint32_t nvn_format);
