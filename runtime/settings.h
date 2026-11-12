@@ -37,7 +37,6 @@ enum { AMD_FIX_AUTO = -1, AMD_FIX_OFF = 0, AMD_FIX_ON = 1 };
 enum { SESSION_FIX_AUTO = -1, SESSION_FIX_OFF = 0, SESSION_FIX_ON = 1 };
 extern const char *const g_language_codes[N_LANGUAGES];  // what the game is told: "ja", "en-US", "es", ...
 extern const char *const g_language_names[N_LANGUAGES];  // for the menu ("Auto", "Japanese", ..., "Spanish")
-
 typedef struct {
     int aspect;          // ASPECT_*: unlocked = fill the window (wider/taller views), original = 16:9 with bars
     bool fullscreen;
