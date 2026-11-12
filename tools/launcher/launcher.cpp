@@ -101,6 +101,7 @@ struct Cfg {
     int gpu_profile = 0, gpu_gpl = -1;
     int occlusion = -1;     // [XCDE][FSR3] -1 automatic (off on AMD iGPUs), 0 off, 1 on (xcde.ini occlusion)
     int amd_fix = -1;       // issue #7: -1 automatic (on for AMD RDNA 3), 0 off, 1 on (xcde.ini amd_fix)
+    int session_fix = -1;   // issue #25: -1 automatic (worker stays on), 0 off, 1 on = no async render worker (xcde.ini session_fix)
     bool gpu_memory_budget = true, gpu_performance = false, gpu_keep_heavy = false;
     bool fullscreen = false;
     int aspect = ASPECT_UNLOCKED;
@@ -416,6 +417,7 @@ static void load() {
         else if (!strcmp(k, "gpu_memory_budget")) g.gpu_memory_budget = atoi(v) != 0;
         else if (!strcmp(k, "occlusion")) g.occlusion = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
         else if (!strcmp(k, "amd_fix")) g.amd_fix = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
+        else if (!strcmp(k, "session_fix")) g.session_fix = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
         else if (!strcmp(k, "rumble")) g.rumble = atoi(v) != 0;
         else if (!strcmp(k, "gpu_preset")) { g.quality_preset=xcde_quality_parse(v); g.gpu_performance=g.quality_preset==QUALITY_PERFORMANCE || g.quality_preset==QUALITY_POTATO; }
         else if (!strcmp(k, "low_memory")) g.gpu_performance=atoi(v)!=0;
@@ -458,6 +460,7 @@ static bool save() {
         g.gpu_memory_budget, xcde_quality_name(g.quality_preset), g.gpu_keep_heavy);
     fprintf(f, "occlusion = %s\n", g.occlusion == 1 ? "on" : g.occlusion == 0 ? "off" : "auto");
     fprintf(f, "amd_fix = %s\n", g.amd_fix == 1 ? "on" : g.amd_fix == 0 ? "off" : "auto");
+    fprintf(f, "session_fix = %s\n", g.session_fix == 1 ? "on" : g.session_fix == 0 ? "off" : "auto");
     fprintf(f,"low_memory = %d\ndynamic_min_height = %d\ndynamic_max_height = %d\neffects_off = %u\n",g.gpu_performance,g.dynamic_min_height,g.dynamic_max_height,g.effects_off);
     fprintf(f, "fullscreen = %d\nwindow = %s\nresolution = %s\nupscaler = %s\nantialias = %s\nshow_fps = %d\n", g.fullscreen,
             k_wins[g.win], k_res_ini[g.res], g.upscaler_auto ? "auto" : k_ups_ini[g.upscaler], g.smaa ? "smaa" : "off", g.show_fps);
@@ -865,6 +868,16 @@ static void tab_graphics() {
             g.amd_fix = fix == 1 ? 0 : fix == 2 ? 1 : -1;
         ImGui::SetItemTooltip(T("Puntos de color de 1-2 px en gráficas AMD RDNA 3 (issue #7).\n"
                                 "Automático: solo se activa en RDNA 3. Desactivado si te baja el rendimiento."));
+    }
+    {   // [XCDE] issue #25: long-session corruption. Conservative mode: no async render worker.
+        static const char *ss_ui[] = {"Automático (activado)", "Desactivado", "Activado"};
+        static const char *ss_en[] = {"Automatic (on)", "Off", "On"};
+        int ss = g.session_fix == 0 ? 1 : g.session_fix == 1 ? 2 : 0;
+        if (monado_combo(g.ui_lang ? "Compatibilidad de sesión larga (al reiniciar)" : "Long-session compatibility (restart)",
+                         &ss, g.ui_lang ? ss_en : ss_ui, 3))
+            g.session_fix = ss == 1 ? 0 : ss == 2 ? 1 : -1;
+        ImGui::SetItemTooltip(T("Evita que modelos y texturas se corrompan en partidas largas.\n"
+                                "Desactiva el hilo de render asíncrono (algo menos de rendimiento)."));
     }
     ImGui::TextDisabled(g.ui_lang ? "GPU changes apply on next launch." : "Los cambios GPU se aplican al iniciar el juego.");
     }

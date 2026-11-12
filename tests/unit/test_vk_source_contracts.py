@@ -68,6 +68,7 @@ class VulkanSourceContracts(unittest.TestCase):
         self.assertIn('"gpu_gpl"', settings)
         self.assertIn('"gpu_memory_budget"', settings)
         self.assertIn('"amd_fix"', settings)
+        self.assertIn('"session_fix"', settings)
         self.assertIn("AMD_FIX_AUTO", header)
         self.assertIn("g_settings.gpu_index", DEVICE)
         self.assertIn("GPU_PROFILE_COMPATIBILITY", header)
