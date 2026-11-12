@@ -110,7 +110,12 @@ static void maybe_edit(File *f) {
     // tmaa only has to be off when our Halton jitter is on (it would blur the jittered input, see #14): the jitter is
     // off by default since #14, XCDE_TMP_JIT_FORCE revives it as runtime/nvn/vulkan/temporal.c tmp_jitter decides.
     if (!g_settings.game_blur) strcat(edits, "AntiAliasing=off,blur2=off,furBlur=off");
-    else if (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS) strcat(edits, "AntiAliasing=off");
+    // [XCDE] v12 #29: with the jitter at zero (099d90f) the game's AA no longer blurs any jittered input, so turning it
+    // off under FSR 3 / DLSS only left the image without any anti-aliasing at all (our SMAA was dead too, see exec.c
+    // post_process). It stays off ONLY when the jitter is revived (XCDE_TMP_JIT_FORCE), the case this rule was written
+    // for; tmaa=off below already follows taa_off otherwise.
+    else if ((g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS) && g_settings.taa_off)
+        strcat(edits, "AntiAliasing=off");
     // [XCDE] xcde.ini taa = 0 (or the revived jitter): the game's temporal AA off; its other AA and motion blur as above
     {
         extern bool tmp_jitter_active(void);

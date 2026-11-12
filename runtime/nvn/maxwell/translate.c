@@ -667,6 +667,12 @@ static const char *alayer(Ctx *c, const char *r, int slot, char *buf) {
 }
 #define ALAYER(r, slot) alayer(c, (r), (slot), alloca(96))
 
+// [XCDE] v12: the 16:9 box (uvb) can only engage when the window is not 16:9 (exec.c g_draw_wide_remap).
+// Outside that case it is a guaranteed no-op that only costs one UBO read per sample; with this off the
+// shaders are V11's again in 16:9. device.c sets it when the swapchain is created; true by default so a
+// shader compiled before the swapchain exists keeps the remap (loses the benefit, breaks nothing).
+bool g_wide_box_possible = true;  // (false = do not emit uvb)
+
 // GLSL texture lookup on slot `slot` (its type is final here: a conflicting use fails in tex_slot).
 // co: coordinate expressions (1 for 1D, 2 for 2D, 3 for 3D / cube), layer: uint expression or NULL, dref: depth
 // reference or NULL, lod_kind 0 implicit / 1 level / 2 bias (lod), off: ivec2 texel offset or NULL.
@@ -708,7 +714,7 @@ static void glsl_sample(Ctx *c, char *out, int slot, const char *const *co, cons
         else snprintf(xs, sizeof xs, "%s", co[0]);
     } else if (n == 2) {
         // [XCDE] frost fix: remap the sampled UVs into the centred 16:9 box (uvb no-ops while the row is zero)
-        if (c->stage == STAGE_FRAGMENT) {
+        if (c->stage == STAGE_FRAGMENT && g_wide_box_possible) {
             c->uses_rscale = true;
             if (off) snprintf(xs, sizeof xs, "uvb((vec2(%s, %s) + vec2(%s) / vec2(tsize%d(%s).xy)), rscale[%d])", co[0], co[1], off, slot, L, slot + 65);
             else snprintf(xs, sizeof xs, "uvb(vec2(%s, %s), rscale[%d])", co[0], co[1], slot + 65);
@@ -902,7 +908,7 @@ static void emit_tld4s(Ctx *c, uint64_t w) {
     const char *A = reg(c, a, ra), *Bv = reg(c, b, rb);
     int slot = tex_slot(c, index, TEXTYPE_2D, false, false);
     char call[512];
-    if (c->stage == STAGE_FRAGMENT) {  // [XCDE] frost fix: same box remap as glsl_sample
+    if (c->stage == STAGE_FRAGMENT && g_wide_box_possible) {  // [XCDE] frost fix: same box remap as glsl_sample
         c->uses_rscale = true;
         sprintf(call, "textureGather(t%d, uvb(vec2(as_type<float>(%s), as_type<float>(%s)), rscale[%d]), %d)", slot, A, Bv, slot + 65, comp);
     } else
@@ -943,7 +949,7 @@ static void emit_tld4(Ctx *c, uint64_t w) {
     if (dc) { c->reg_used[pr] = 1; sprintf(dref, "as_type<float>(r%d)", pr); pr++; }
     char uv[512];
     // [XCDE] frost fix: same box remap as glsl_sample (tld4 is fragment-only, 2D)
-    if (c->stage == STAGE_FRAGMENT) {
+    if (c->stage == STAGE_FRAGMENT && g_wide_box_possible) {
         c->uses_rscale = true;
         if (off[0]) sprintf(uv, "uvb((vec2(%s, %s) + vec2(%s) / vec2(tsize%d(0).xy)), rscale[%d])", x, y, off, slot, slot + 65);
         else sprintf(uv, "uvb(vec2(%s, %s), rscale[%d])", x, y, slot + 65);
