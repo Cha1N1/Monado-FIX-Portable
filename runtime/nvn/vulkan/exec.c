@@ -849,9 +849,17 @@ VkSpan vk_transient_copy(const void *data, uint64_t size, uint64_t align) {
 // while it's identical, within one submission. slot: one per kind of data.
 enum { DEDUPE_RSCALE_V, DEDUPE_RSCALE_F, DEDUPE_TINT, DEDUPE_DRV_V, DEDUPE_DRV_F, DEDUPE_DRV_C, DEDUPE_SLOTS };
 static VkSpan copy_dedupe(int slot, const void *data, uint64_t size, uint64_t align) {
-    static struct { uint64_t seq, size; uint8_t data[0x800]; VkSpan span; } last[DEDUPE_SLOTS];
+    // [XCDE] v12: `rs` grew to 129 rows (2064 B) with the 16:9 box of the widescreen and exceeded this 0x800,
+    // so the dedupe was skipped EVERY time and every draw reserved its own UBO. 0x1000 leaves room to grow
+    // up to 256 rows; the warning below keeps this from happening silently again.
+    static struct { uint64_t seq, size; uint8_t data[0x1000]; VkSpan span; } last[DEDUPE_SLOTS];
     uint64_t seq = vk_pending_seq();
-    if (size > sizeof last[0].data) return vk_transient_copy(data, size, align);
+    if (size > sizeof last[0].data) {
+        static int warned;
+        if (!warned++) LOG("[vk] copy_dedupe bypassed: %llu bytes > %zu (slot %d)\n",
+                           (unsigned long long)size, sizeof last[0].data, slot);
+        return vk_transient_copy(data, size, align);
+    }
     if (last[slot].seq == seq && last[slot].size == size && !memcmp(last[slot].data, data, size)) return last[slot].span;
     VkSpan s = vk_transient_copy(data, size, align);
     last[slot].seq = seq; last[slot].size = size; memcpy(last[slot].data, data, size); last[slot].span = s;
@@ -4127,6 +4135,12 @@ static void resolve_feedback(Prog *pr) {
     if (off < 0) off = getenv("LARECOMP_NO_FEEDBACK") != NULL;
     if (off) return;
     ShaderInfo *infos[2] = {pr->vi, pr->fi};
+    // [XCDE] v12 (plan B, #7, doc section 4.4): this call's copies are executed together at the end: one
+    // vk_end_pass() + one vk_full_barrier() for all of them instead of one per copy. The pass stays open while the
+    // pending list fills (nothing in the loop records render commands), so the recorded command order does not change.
+    struct FbPend { NvnTexture *t; TexBackend *src, *dst; VkImageAspectFlags sa; int si, idx; };
+    struct FbPend pend[4];  // (nfeedback caps at 4 per call, so there can be at most 4 copies)
+    int np = 0;
     for (int sg = 0; sg < 2; sg++)
         for (int i = 0; i < infos[sg]->ntex; i++) {
             NvnTexture *t = shader_texture_object(sg, &infos[sg]->tex[i]);
@@ -4154,6 +4168,15 @@ static void resolve_feedback(Prog *pr) {
                     if (!direct) LOG("[vk] AMD RDNA 3: feedback snapshots (amd_fix=auto, GitHub #7)\n");
                 }
             }
+            // [XCDE] v12 (amd_fix cost, #7): with VK_EXT_attachment_feedback_loop_layout (device.c + textures.c) a draw can
+            // sample the attachment it is writing, so nothing has to be copied: RDNA 3 no longer needs the snapshot copies
+            // and the direct path costs what it did before the amd_fix. The snapshot stays as plan B for drivers without
+            // the extension (or LARECOMP_NO_FEEDBACK_LOOP=1 to force it).
+            if (!direct && g_vk.feedback_loop && !getenv("LARECOMP_NO_FEEDBACK_LOOP")) {
+                static int logged;
+                if (!logged++) LOG("[vk] attachment feedback loop: staying on the direct path, no snapshot copies (GitHub #7 amd_fix)\n");
+                direct = 1;
+            }
             if (direct && t != st.rt.depth) continue;
             bool have = false;
             for (int k = 0; k < nfeedback; k++) have |= feedback_tex[k] == t;
@@ -4168,7 +4191,15 @@ static void resolve_feedback(Prog *pr) {
             for (int k = 0; k < nsnaps; k++) if (snaps[k].key == t && snaps[k].copy.image) existing = &snaps[k];
             VkImageAspectFlags sa = src->aspect & VK_IMAGE_ASPECT_DEPTH_BIT ? VK_IMAGE_ASPECT_DEPTH_BIT : src->aspect;
             static const VkComponentMapping id = {0};
-            if (!nosnap && si >= 0 && (snap_ok[si] || self_write) && existing) {
+            // [XCDE] v12 (plan B, #7): one copy per texture and frame at most. The #7 dots are subpixel: the copy made
+            // earlier this frame still serves even though snapshots_invalidate clears snap_ok on every write of the
+            // attachment (that is what made this path run ~1,700 times a frame in battle).
+            static struct { NvnTexture *t; uint64_t frame; } once[16];
+            static int nonce;
+            uint64_t fr = renderer_present_count();
+            bool once_copy = false;
+            for (int k = 0; k < 16; k++) once_copy |= once[k].t == t && once[k].frame == fr;
+            if (!nosnap && si >= 0 && ((snap_ok[si] || self_write) || once_copy) && existing) {
                 feedback_tex[nfeedback] = t;
                 feedback_view[nfeedback++] = vk_image_view(&existing->copy, VK_IMAGE_VIEW_TYPE_2D, src->format, 0, 1, 0, 1, id, sa);
                 continue;
@@ -4190,29 +4221,39 @@ static void resolve_feedback(Prog *pr) {
                 }
             }
             if (ct_on()) LOG("[ct] snapshot %p %ux%u (was %s, si %d)\n", (void *)t, src->width, src->height, si >= 0 ? snap_why[si] : "new", si);
-            vk_end_pass();
-            TexBackend *dst = snapshot_image(t, src);
-            VkCommandBuffer cb = vk_cmd();
-            vk_full_barrier(cb);
-            gp_mark(cb, "feedback snapshot %ux%u fmt %d", src->width, src->height, src->format);
-            VkImageCopy rg = {.srcSubresource = {src->aspect, 0, 0, 1}, .dstSubresource = {src->aspect, 0, 0, 1},
-                              .extent = {src->width, src->height, 1}};
-            vk_watch(dst->image, "exec.c:1954 vkCmdCopyImage"); vkCmdCopyImage(cb, src->image, VK_IMAGE_LAYOUT_GENERAL, dst->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
-            if (g_debug_frame && (src->aspect & VK_IMAGE_ASPECT_DEPTH_BIT)) {
+            { int oslot = nonce++ & 15; once[oslot].t = t; once[oslot].frame = fr; }  // [XCDE] v12 (plan B): copied this frame
+            TexBackend *dst = snapshot_image(t, src);  // (image creation only: the copy itself is deferred, see the flush)
+            if (si < 0) { static int rr; si = rr++ & 7; snap_tex[si] = t; }
+            pend[np++] = (struct FbPend){t, src, dst, sa, si, nfeedback};
+            nfeedback++;  // (slot reserved here, filled by the flush below)
+        }
+    // [XCDE] v12 (plan B, #7): flush of the pending copies: one end of pass and one full barrier, then every copy.
+    if (np) {
+        vk_end_pass();
+        VkCommandBuffer cb = vk_cmd();
+        vk_full_barrier(cb);
+        static const VkComponentMapping id = {0};
+        for (int k = 0; k < np; k++) {
+            struct FbPend *e = &pend[k];
+            gp_mark(cb, "feedback snapshot %ux%u fmt %d", e->src->width, e->src->height, e->src->format);
+            VkImageCopy rg = {.srcSubresource = {e->src->aspect, 0, 0, 1}, .dstSubresource = {e->src->aspect, 0, 0, 1},
+                              .extent = {e->src->width, e->src->height, 1}};
+            vk_watch(e->dst->image, "exec.c:1954 vkCmdCopyImage"); vkCmdCopyImage(cb, e->src->image, VK_IMAGE_LAYOUT_GENERAL, e->dst->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+            if (g_debug_frame && (e->src->aspect & VK_IMAGE_ASPECT_DEPTH_BIT)) {
                 static int nd;
                 char path[128];
                 snprintf(path, sizeof path, "build/fbdepth_%03d_src.pgm", nd);
-                debug_save_depth(src, path);
+                debug_save_depth(e->src, path);
                 snprintf(path, sizeof path, "build/fbdepth_%03d_snap.pgm", nd++);
-                debug_save_depth(dst, path);
+                debug_save_depth(e->dst, path);
                 cb = vk_cmd();
             }
-            feedback_tex[nfeedback] = t;
-            feedback_view[nfeedback++] = vk_image_view(dst, VK_IMAGE_VIEW_TYPE_2D, src->format, 0, 1, 0, 1, id, sa);
-            if (si < 0) { static int rr; si = rr++ & 7; snap_tex[si] = t; }
-            snap_ok[si] = true;
-            st.rt_dirty = true;
+            feedback_tex[e->idx] = e->t;
+            feedback_view[e->idx] = vk_image_view(e->dst, VK_IMAGE_VIEW_TYPE_2D, e->src->format, 0, 1, 0, 1, id, e->sa);
+            snap_ok[e->si] = true;
         }
+        st.rt_dirty = true;
+    }
 }
 
 // ================================================================== resource binding
@@ -5158,6 +5199,7 @@ static VkDescriptorSet stage_set(Prog *p, VkDescriptorSetLayout layout, uint32_t
     int n = 0;
     int sg = stage == 1 ? 1 : 0;
     float rs[129][4];  // ([65 + unit]: per-unit 16:9 box map, [XCDE] frost fix; rows 1..64 keep (sc, d16); filled only for a binding 18)
+                       // (129 * 16 = 2064 B: < 0x1000 of copy_dedupe — do not grow past 256 rows without raising that buffer)
     for (int i = 0; i < p->nbinds; i++) {
         VkBindingInfo *b = &p->binds[i];
         if (b->set != set) continue;
@@ -5485,6 +5527,21 @@ static bool tmp_cam_check(const float *f, TmpCamera *c) {
     c->ok = true;
     return true;
 }
+// [XCDE] v12: the camera scan ran up to 14 times per draw (up to ~55k per frame on DLSS/FSR3 machines). The same
+// camera UBO address repeats across thousands of consecutive draws: memoize the verdict, reset per present frame.
+static bool tmp_cam_is_world(uint64_t addr) {
+    enum { N = 128 };
+    static struct { uint64_t addr, frame; bool world; } memo[N];
+    static int rr;
+    uint64_t fr = renderer_present_count();
+    uint32_t h = (uint32_t)((addr >> 8) * 2654435761u) & (N - 1);
+    if (memo[h].frame == fr && memo[h].addr == addr) return memo[h].world;
+    TmpCamera scratch;
+    bool w = tmp_cam_check((const float *)(uintptr_t)addr, &scratch);
+    memo[h].addr = addr; memo[h].frame = fr; memo[h].world = w;
+    (void)rr;
+    return w;
+}
 static bool tmp_dm1 = true;          // the scene draws' NVN depth mode (clip z in [-1, 1])
 static void tmp_draw(const Prog *pr, float *jx, float *jy) {
     uint64_t fr = renderer_present_count();
@@ -5498,7 +5555,7 @@ static void tmp_draw(const Prog *pr, float *jx, float *jy) {
         for (int k = 0; k < 14; k++) {
             const Range *u = &st.ubuf[0][k];
             if (u->addr < HEAP_BASE || u->size < 176) continue;
-            if (tmp_cam_check((const float *)(uintptr_t)u->addr, &tmp_cam)) { tmp_depth_tex = st.rt.depth; tmp_dm1 = pr->vkey.depth_minus_one; break; }
+            if (tmp_cam_is_world(u->addr) && tmp_cam_check((const float *)(uintptr_t)u->addr, &tmp_cam)) { tmp_depth_tex = st.rt.depth; tmp_dm1 = pr->vkey.depth_minus_one; break; }
         }
     // (the same image: the game draws its prepass and colour passes through different texture objects over one depth)
     TexBackend *db = st.rt.depth->backend, *sb = tmp_depth_tex ? tmp_depth_tex->backend : NULL;
@@ -5519,11 +5576,10 @@ static void tmp_draw(const Prog *pr, float *jx, float *jy) {
         static int nodepth = -1;
         if (nodepth < 0) { const char *e = getenv("XCDE_TMP_JIT_NODEPTH"); nodepth = !(e && *e == '0'); }
         if (nodepth) {
-            TmpCamera scratch;
             for (int k = 0; k < 14 && !world; k++) {
                 const Range *u = &st.ubuf[0][k];
                 if (u->addr < HEAP_BASE || u->size < 176) continue;
-                world = tmp_cam_check((const float *)(uintptr_t)u->addr, &scratch);
+                world = tmp_cam_is_world(u->addr);
             }
         }
     }
@@ -6999,6 +7055,11 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
     if (ow > 16384) ow = 16384;
     if (oh > 16384) oh = 16384;
     bool fsr = g_settings.upscaler == UPSCALE_FSR1 && (ow > b->width + 1 || oh > b->height + 1);  // (an upscale only)
+    bool upscaled = false;  // [XCDE] v12 #29: v is already at the output size (the SMAA below then runs at ow x oh)
+    // [XCDE] v12 #29: XCDE_SMAA_AFTER_UPSCALE=0 restores the behaviour before the change (no SMAA under FSR 3 / DLSS,
+    // SMAA at the render resolution under FSR 1), so a tester can A/B without rebuilding.
+    static int smaa_after = -1;
+    if (smaa_after < 0) { const char *e = getenv("XCDE_SMAA_AFTER_UPSCALE"); smaa_after = e ? atoi(e) != 0 : 1; }
     extern void vk_frame_suspend(void);
     extern void vk_frame_resume(void);
     if (tmp_enabled()) {  // [XCDE] FSR 3 / DLSS (temporal.c); without this frame's camera: FSR 1 as the upscaler
@@ -7017,25 +7078,23 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
             t = post_view(hud);
         }
         vk_frame_resume();
-        if (t) return t;
-        smaa = false;
-        fsr = ow > b->width + 1 || oh > b->height + 1;
+        // [XCDE] v12 #29: the SMAA runs AFTER the upscaler (with FSR 3 / DLSS the early return made the SMAA block dead
+        // code: toggling it changed nothing). The upscaled view is kept and the SMAA blends it at the output size.
+        // fg_scene was taken before the HUD composite and is untouched: frame generation keeps drawing the scaled
+        // scene without SMAA (it interpolates, it does not re-antialias).
+        if (t && smaa_after) {
+            v = t;
+            fsr = false;      // (already scaled)
+            upscaled = true;
+        } else if (t) {
+            return t;         // (XCDE_SMAA_AFTER_UPSCALE=0: the behaviour before this change)
+        } else {
+            smaa = false;
+            fsr = ow > b->width + 1 || oh > b->height + 1;
+        }
     }
     if (!smaa && !fsr) return v;
     vk_frame_suspend();
-    if (smaa) {  // SMAA 1x: luma edges -> blending weights -> neighbourhood blending
-        float w = (float)b->width, h = (float)b->height;
-        float m[8] = {1.0f / w, 1.0f / h, w, h};
-        TexBackend *edges = post_image(0, b->width, b->height), *weights = post_image(1, b->width, b->height);
-        TexBackend *out = post_image(2, b->width, b->height);
-        VkImageView in[3] = {v};
-        post_pass(cb, "smaa_edge.frag", in, 1, edges, m, true);
-        VkImageView wi[3] = {post_view(edges), smaa_lut(0), smaa_lut(1)};
-        post_pass(cb, "smaa_weight.frag", wi, 3, weights, m, true);
-        VkImageView bi[3] = {v, post_view(weights)};
-        post_pass(cb, "smaa_blend.frag", bi, 2, out, m, false);
-        v = post_view(out);
-    }
     if (fsr) {
         float iw = (float)b->width, ih = (float)b->height;
         TexBackend *e = post_image(3, ow, oh), *r = post_image(4, ow, oh);
@@ -7046,15 +7105,34 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
         VkImageView ri_[3] = {post_view(e)};
         post_pass(cb, "rcas.frag", ri_, 1, r, pr, false);
         v = post_view(r);
+        upscaled = true;  // [XCDE] v12 #29: the SMAA below then runs at the output size, after the RCAS sharpening
+    }
+    // [XCDE] v12 #29: the SMAA moved AFTER the upscaler: at the render resolution it only saw the stairs that exist
+    // there and the RCAS / upscaler rebuilt the hard edge right after it. Over the upscaled image (issue #29) it
+    // blends the edges at the size they are shown at.
+    if (smaa) {  // SMAA 1x: luma edges -> blending weights -> neighbourhood blending
+        uint32_t sw = upscaled ? ow : b->width, sh = upscaled ? oh : b->height;
+        float w = (float)sw, h = (float)sh;
+        float m[8] = {1.0f / w, 1.0f / h, w, h};
+        TexBackend *edges = post_image(0, sw, sh), *weights = post_image(1, sw, sh);
+        TexBackend *out = post_image(2, sw, sh);
+        VkImageView in[3] = {v};
+        post_pass(cb, "smaa_edge.frag", in, 1, edges, m, true);
+        VkImageView wi[3] = {post_view(edges), smaa_lut(0), smaa_lut(1)};
+        post_pass(cb, "smaa_weight.frag", wi, 3, weights, m, true);
+        VkImageView bi[3] = {v, post_view(weights)};
+        post_pass(cb, "smaa_blend.frag", bi, 2, out, m, false);
+        v = post_view(out);
     }
     vk_full_barrier(cb);
     vk_frame_resume();
     {
         static uint32_t piw, pih, pow_, poh;
-        static int psm = -1, pfs = -1;
-        if (b->width != piw || b->height != pih || ow != pow_ || oh != poh || smaa != psm || fsr != pfs)
-            LOG("[post] %ux%u%s%s -> %ux%u\n", b->width, b->height, smaa ? " smaa" : "", fsr ? " fsr1" : "", ow, oh);
-        piw = b->width; pih = b->height; pow_ = ow; poh = oh; psm = smaa; pfs = fsr;
+        static int psm = -1, pfs = -1, pup = -1;
+        if (b->width != piw || b->height != pih || ow != pow_ || oh != poh || smaa != psm || fsr != pfs || (upscaled ? 1 : 0) != pup)
+            LOG("[post] %ux%u -> %s%s%ux%u\n", b->width, b->height, fsr ? "fsr1 " : upscaled ? "upscaled " : "",
+                smaa ? "smaa " : "", ow, oh);  // [XCDE] v12 #29: the order is the chain: upscaler first, SMAA after it
+        piw = b->width; pih = b->height; pow_ = ow; poh = oh; psm = smaa; pfs = fsr; pup = upscaled ? 1 : 0;
     }
     return v;
 }

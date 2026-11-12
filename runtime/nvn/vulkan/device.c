@@ -270,6 +270,10 @@ static void create_device(void) {
     if (g_vk.custom_border) ext[n_ext++] = VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME;
     g_vk.divisor = has_ext(ep, ne, VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
     if (g_vk.divisor) ext[n_ext++] = VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME;
+    // [XCDE] v12: VK_EXT_attachment_feedback_loop_layout (amd_fix cost, #7): lets a draw sample the attachment it is
+    // writing, so resolve_feedback stays on the direct path instead of copying a snapshot per draw.
+    g_vk.feedback_loop = has_ext(ep, ne, VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME);
+    if (g_vk.feedback_loop) ext[n_ext++] = VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME;
     g_vk.host_import = has_ext(ep, ne, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME) &&
                        g_settings.gpu_profile != GPU_PROFILE_COMPATIBILITY;  // optional zero-copy guest heap path
     if (g_vk.host_import) ext[n_ext++] = VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME;
@@ -360,15 +364,29 @@ static void create_device(void) {
         g_vk.custom_border = g_vk.custom_border && cbc_have.customBorderColors;
         g_vk.divisor = g_vk.divisor && div_have.vertexAttributeInstanceRateDivisor;
     }
+    if (g_vk.feedback_loop) {  // the extension is not enough: the feature must be supported too, or vkCreateDevice fails
+        VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT afl_have = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_FEATURES_EXT};
+        VkPhysicalDeviceFeatures2 afl_q = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &afl_have};
+        vkGetPhysicalDeviceFeatures2(g_vk.phys, &afl_q);
+        g_vk.feedback_loop = afl_have.attachmentFeedbackLoopLayout == VK_TRUE;
+    }
+    LOG("[vk] attachment feedback loop layout: %s\n", g_vk.feedback_loop ? "on" : "not available");
+    // [XCDE] v12: attachment feedback loop layout enable (chained only when the device has the extension + feature:
+    // chaining a feature struct without support fails vkCreateDevice and the game would not boot)
+    VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT afl = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_FEATURES_EXT,
+        .attachmentFeedbackLoopLayout = g_vk.feedback_loop ? VK_TRUE : VK_FALSE};
     VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT div = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT,
         .vertexAttributeInstanceRateDivisor = g_vk.divisor ? VK_TRUE : VK_FALSE,
-        .vertexAttributeInstanceRateZeroDivisor = VK_FALSE};
+        .vertexAttributeInstanceRateZeroDivisor = VK_FALSE,
+        .pNext = g_vk.feedback_loop ? (void *)&afl : NULL};
     VkPhysicalDeviceCustomBorderColorFeaturesEXT cbc = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT,
         .customBorderColors = g_vk.custom_border ? VK_TRUE : VK_FALSE,
         .customBorderColorWithoutFormat = g_vk.custom_border && cbc_have.customBorderColorWithoutFormat ? VK_TRUE : VK_FALSE,
-        .pNext = g_vk.divisor ? &div : NULL};
+        .pNext = g_vk.divisor ? (void *)&div : g_vk.feedback_loop ? (void *)&afl : NULL};
     VkPhysicalDeviceVulkan13Features f13 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
                                             .dynamicRendering = h13.dynamicRendering, .synchronization2 = h13.synchronization2,
                                             .shaderDemoteToHelperInvocation = h13.shaderDemoteToHelperInvocation,
@@ -376,10 +394,10 @@ static void create_device(void) {
                                             .maintenance4 = h13.maintenance4,
                                             .pipelineCreationCacheControl = h13.pipelineCreationCacheControl,  // [XCDE] T188
                                             .subgroupSizeControl = h13.subgroupSizeControl, .computeFullSubgroups = h13.computeFullSubgroups,
-                                            .pNext = g_vk.custom_border ? (void *)&cbc : g_vk.divisor ? (void *)&div : NULL};
+                                            .pNext = g_vk.custom_border ? (void *)&cbc : g_vk.divisor ? (void *)&div : g_vk.feedback_loop ? (void *)&afl : NULL};
     VkPhysicalDeviceSynchronization2Features sync_enable = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES,
                                                            .synchronization2 = sync_have.synchronization2,
-                                                           .pNext = g_vk.custom_border ? (void *)&cbc : g_vk.divisor ? (void *)&div : NULL};
+                                                           .pNext = g_vk.custom_border ? (void *)&cbc : g_vk.divisor ? (void *)&div : g_vk.feedback_loop ? (void *)&afl : NULL};
     VkPhysicalDeviceDynamicRenderingFeatures render_enable = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES,
                                                              .dynamicRendering = render_have.dynamicRendering, .pNext = &sync_enable};
     VkPhysicalDeviceVulkan12Features f12 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
@@ -711,6 +729,11 @@ static void create_swapchain(void) {
     }
     g_vk.sc_format = sf.format;
     g_vk.sc_extent = ext;
+    // [XCDE] v12: the wide-box UV remap (uvb, translate.c) can only matter when the window is not 16:9.
+    // Set here, right after the swapchain is (re)created; shaders compiled earlier keep true by default.
+    extern bool g_wide_box_possible;
+    g_wide_box_possible = fabs((double)ext.width / (double)ext.height - 16.0 / 9.0) > 0.02;
+    LOG("[vk] wide box remap: %s (window %ux%u)\n", g_wide_box_possible ? "on" : "off", ext.width, ext.height);
     g_vk.sc_count = 0;  // (count first: AMD's frame-generation swapchain fills exactly what it reports)
     sc_images(g_vk.dev, g_vk.swapchain, &g_vk.sc_count, NULL);
     if (g_vk.sc_count > 8) g_vk.sc_count = 8;

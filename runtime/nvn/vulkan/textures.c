@@ -437,6 +437,12 @@ static void create_image(NvnTexture *t, TexBackend *b) {
             if (!format_supports(vf, VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) flags |= VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
         }
     }
+    // [XCDE] v12 (amd_fix cost, #7): with VK_EXT_attachment_feedback_loop_layout an image that can be an attachment may
+    // also be sampled in the same draw that writes it (resolve_feedback then stays on the direct path on RDNA 3).
+    // The bit must be decided before vkCreateImage (vk_tex(t, true) creates lazily: an image made without the bit
+    // would have to be recreated, so every attachment-capable image gets it up front when the device has the feature).
+    if (g_vk.feedback_loop && (usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)))
+        usage |= VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
     b->has_storage = (usage & VK_IMAGE_USAGE_STORAGE_BIT) != 0;
     // [XCDE] spec_lowend_gpu R6b (LASRecomp 03ee802): a mutable image without a format list loses colour compression
     // (DCC on AMD, CCS on Intel). The views XCDE makes (walk + battle routes): the image's own format and, for SULD /
