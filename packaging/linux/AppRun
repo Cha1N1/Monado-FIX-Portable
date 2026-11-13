@@ -13,6 +13,10 @@ appdir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 export LD_LIBRARY_PATH="$appdir/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export MONADO_FSR4_ASSET_DIR="${MONADO_FSR4_ASSET_DIR:-$appdir/usr/share/monado/fsr4}"
 export XCDE_VARIANTS_SEED="${XCDE_VARIANTS_SEED:-$appdir/usr/share/monado/variants_seed.bin}"
+# Release AppImages: the first-start game code builder (the launcher runs it once; the result goes to the data folder)
+if [ -f "$appdir/usr/share/monado/gamebuild/link.json" ]; then
+  export XCDE_GAMEBUILD_DIR="${XCDE_GAMEBUILD_DIR:-$appdir/usr/share/monado/gamebuild}"
+fi
 direct=
 if [ "${1:-}" = --play ]; then direct=1; shift; fi
 case "${1:-}" in

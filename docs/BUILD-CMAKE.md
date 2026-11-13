@@ -62,3 +62,38 @@ Add the unit to `RT_UNITS` (under `runtime/`) or `NVN_UNITS` (under `runtime/nvn
 ## Build directories
 
 Configure and build files live in `build/cmake/<preset>/`. Deleting that folder forces a clean configure; the executables in `build/` and `build/linux/` stay where they are.
+
+## Release packages (no game code)
+
+`-DMONADO_RELEASE=ON` builds a runtime **without game code**. Instead of linking the recompiled game, it loads
+`gamebuild/lasgame.so` (Linux) or `gamebuild/lasgame.dll` (Windows), which the launcher builds once on the player's PC
+from their own dump. Nothing derived from the game is in the package, so it can be published.
+
+The pieces:
+- `tools/gamebuild.py`: the first-start builder. It lifts the code from the dump with `tools/lifter`, compiles it with a
+  bundled `zig cc` at the same flags as a source build (`tools/game_id.py`), and links the library. It reports progress
+  to the launcher and only rebuilds what changed.
+- `tools/game_id.py`: the `GAMELIB_ID` fingerprint of the generator, guest headers and flags. The runtime and the library
+  must carry the same one, or the library is rebuilt.
+- `tools/gamebuild_stage.py`: copies the builder's inputs (headers, patches, profile, a trimmed zig) to
+  `build/gamebuild/`.
+- `tools/freeze_gamebuild.py`: turns the builder into one executable with PyInstaller, so players need no Python.
+- `tools/make_appimage.py --release` and `tools/make_portable.py --release`: package it all, and refuse a tree that
+  `tools/package_guard.py` flags.
+
+Linux, by hand (the release workflow does the same):
+
+```bash
+python -m venv .venv && .venv/bin/pip install ziglang==0.17.1 capstone unicorn lz4 pyinstaller
+.venv/bin/python tools/gamebuild_stage.py --dest build/gamebuild --platform linux
+cmake --preset linux -B build/cmake/release -DMONADO_RELEASE=ON && cmake --build build/cmake/release
+.venv/bin/python tools/freeze_gamebuild.py --python .venv/bin/python
+python3 tools/make_appimage.py --release
+```
+
+On Windows, stage with `--platform windows --link-file xcde_imports.a` first (the game library links against the
+executable's exports), use the `windows` preset, and package with `tools/make_portable.py <out> --release`.
+
+`.github/workflows/release.yml` builds both packages with every upscaler: run it by hand, or push a `v*` tag for a
+draft GitHub release. FSR 4 Lite's model files are not packaged (they are derived from AMD's SDK): without them the
+runtime falls back to FSR 1.
