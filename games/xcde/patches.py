@@ -80,3 +80,27 @@ def _footstep_marker(gen, addr):
 
 PATCHES[0x70003f4c0c] = Patch(0x36000280, _footstep_marker, 'T-FOOTSTEP-TIMING',
                               'tbz w0, #0 - follower foot marker replay guard')
+
+
+# [XCDE] Menu hold/repeat timers above 30 FPS. f_7000578b50 advanced every pad
+# hold/repeat timer by the fixed simulation step at UpdateInfo+4 (1/30 s), once
+# per presented frame, so at 120 FPS a short tap repeated and held directions
+# scrolled 4x too fast. UpdateInfo+8 already holds the elapsed seconds of the
+# frame (+12 is elapsed authored frames). Use it only for these 27 timer loads;
+# button edge detection, input polling and layout rendering stay intact.
+def _menu_input_elapsed(gen, addr):
+    return '{ uint64_t ea = c->x[20] + 8; c->v[1] = LD32(ea); }'
+
+
+_MENU_HOLD_TIME_LOADS = (
+    0x7000578ebc, 0x7000578eec, 0x7000578f18, 0x7000578f44,
+    0x7000578f70, 0x7000578f9c, 0x7000578fc8, 0x7000578ff4,
+    0x7000579020, 0x700057904c, 0x7000579078, 0x70005790a4,
+    0x70005790d0, 0x70005790fc, 0x7000579128, 0x7000579154,
+    0x7000579180, 0x70005791ac, 0x70005791d8, 0x7000579204,
+    0x7000579230, 0x700057925c, 0x7000579288, 0x70005792b4,
+    0x70005792e0, 0x7000579308, 0x70005793b4,
+)
+for _site in _MENU_HOLD_TIME_LOADS:
+    PATCHES[_site] = Patch(0xbd400681, _menu_input_elapsed, 'T-MENU-INPUT',
+                           'ldr s1, [x20, #4] -> elapsed seconds at +8 for menu hold timers')
