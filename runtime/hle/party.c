@@ -19,6 +19,10 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <pthread.h>  // [XCDE] T-LINUX: the same object scanner as the Windows build
+#include <sys/mman.h>
+#include <unistd.h>
 #endif
 
 #define PARTY_LIST_FN 0x70000b6790ull
@@ -70,6 +74,16 @@ static volatile bool g_warp_used;   // (XCDE_WARP: the map jump manager)
 static volatile int g_rescan;       // the game's thread asks the scanner for a new scan
 #ifdef _WIN32
 static SRWLOCK g_found_lock = SRWLOCK_INIT;
+static void found_read_lock(void) { AcquireSRWLockShared(&g_found_lock); }
+static void found_write_lock(void) { AcquireSRWLockExclusive(&g_found_lock); }
+static void found_read_unlock(void) { ReleaseSRWLockShared(&g_found_lock); }
+static void found_write_unlock(void) { ReleaseSRWLockExclusive(&g_found_lock); }
+#else
+static pthread_rwlock_t g_found_lock = PTHREAD_RWLOCK_INITIALIZER;
+static void found_read_lock(void) { pthread_rwlock_rdlock(&g_found_lock); }
+static void found_write_lock(void) { pthread_rwlock_wrlock(&g_found_lock); }
+static void found_read_unlock(void) { pthread_rwlock_unlock(&g_found_lock); }
+static void found_write_unlock(void) { pthread_rwlock_unlock(&g_found_lock); }
 #endif
 
 static bool obj_ok(uint64_t o, int k) { return o && *(volatile uint64_t *)(uintptr_t)o == k_vtables[k]; }
@@ -90,10 +104,26 @@ static void heap_scan(Found *f) {
             }
         a = end;
     }
+#else
+    // [XCDE] T-LINUX: scan only resident pages (mincore): reading untouched guest pages would fault in gigabytes.
+    size_t page = (size_t)sysconf(_SC_PAGESIZE), count = HEAP_MAX / page;
+    unsigned char *resident = malloc(count);
+    if (!resident) return;
+    if (!mincore((void *)(uintptr_t)HEAP_BASE, HEAP_MAX, resident)) {
+        for (size_t i = 0; i < count; i++) if (resident[i] & 1) {
+            const volatile uint64_t *words = (const volatile uint64_t *)(uintptr_t)(HEAP_BASE + i * page);
+            for (size_t j = 0; j < page / sizeof *words; j++) {
+                uint64_t v = words[j];
+                if ((v >> 32) != 0x70) continue;
+                for (int k = 0; k < K_N; k++)
+                    if (v == k_vtables[k] && f->n[k] < SET_MAX) f->obj[k][f->n[k]++] = (uint64_t)(uintptr_t)&words[j];
+            }
+        }
+    }
+    free(resident);
 #endif
 }
 
-#ifdef _WIN32
 // Everything still there? (a scanned object freed or reused, a battle's gauges not created yet)
 static bool found_stale(const Found *f) {
     for (int k = 0; k < K_N; k++)
@@ -107,38 +137,42 @@ static bool found_stale(const Found *f) {
     return hud && *(volatile uint64_t *)(uintptr_t)(hud + 0x2c0) && !f->n[K_GAUGE];  // (a battle without its gauges)
 }
 
-static DWORD WINAPI party_scanner(LPVOID arg) {
+#ifdef _WIN32
+static DWORD WINAPI party_scanner(LPVOID arg)
+#else
+static void *party_scanner(void *arg)
+#endif
+{
     (void)arg;
+#ifndef _WIN32
+    plat_thread_name("party scanner");
+    plat_thread_background();  // (Windows: SetThreadPriority at creation)
+#endif
     static Found scan;
     for (;;) {
-        AcquireSRWLockShared(&g_found_lock);
+        found_read_lock();
         bool stale = found_stale(&g_found);
-        ReleaseSRWLockShared(&g_found_lock);
+        found_read_unlock();
         if (stale || g_rescan) {
             g_rescan = 0;
             heap_scan(&scan);
-            AcquireSRWLockExclusive(&g_found_lock);
+            found_write_lock();
             g_found = scan;
-            ReleaseSRWLockExclusive(&g_found_lock);
+            found_write_unlock();
             // (at most one scan a second; every 4 s while there's no party yet: title screen, loading)
-            Sleep(scan.n[K_FIELD] ? 1000 : 4000);
+            plat_sleep_until_ns(plat_now_ns() + (scan.n[K_FIELD] ? 1000000000ull : 4000000000ull));
         } else {
-            Sleep(250);
+            plat_sleep_until_ns(plat_now_ns() + 250000000ull);
         }
     }
     return 0;
 }
-#endif
 
 // The game's thread: a copy of the last scan (a few hundred bytes)
 static void found_get(Found *f) {
-#ifdef _WIN32
-    AcquireSRWLockShared(&g_found_lock);
+    found_read_lock();
     *f = g_found;
-    ReleaseSRWLockShared(&g_found_lock);
-#else
-    memset(f, 0, sizeof *f);
-#endif
+    found_read_unlock();
 }
 static uint64_t found_one(const Found *f, int k) {
     for (int i = 0; i < f->n[k]; i++) if (obj_ok(f->obj[k][i], k)) return f->obj[k][i];
@@ -905,6 +939,13 @@ void party_game_tick(Cpu *c, uint64_t frame) {
         scanner = true;
         HANDLE t = CreateThread(NULL, 0, party_scanner, NULL, 0, NULL);
         if (t) { SetThreadPriority(t, THREAD_PRIORITY_BELOW_NORMAL); CloseHandle(t); }
+    }
+#else
+    static bool scanner;
+    if (!scanner && (g_party_switch || nat || g_art_used || g_cam_used || g_warp_used)) {
+        scanner = true;
+        pthread_t t;
+        if (!pthread_create(&t, NULL, party_scanner, NULL)) pthread_detach(t);
     }
 #endif
     for (int i = 0; i < nat; i++) if (at[i] == frame) { at[i] = 0; g_switch_req = 1; }

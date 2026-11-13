@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <sys/stat.h>
 #include <zlib.h>
 #ifdef _WIN32
 #include <direct.h>
@@ -137,7 +138,17 @@ static stbtt_fontinfo g_font;
 static unsigned char *g_font_data;
 static bool font_load(void) {
     if (g_font_data) return true;
+#ifdef _WIN32
     static const char *const fonts[] = {"C:/Windows/Fonts/segoeuib.ttf", "C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/segoeui.ttf"};
+#else
+    // [XCDE] T-LINUX-UI: keyboard prompts use an installed, unbundled system font.
+    static const char *const fonts[] = {
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/noto/NotoSans-Bold.ttf"};
+#endif
     for (size_t i = 0; i < sizeof fonts / sizeof *fonts; i++) {
         FILE *f = fopen(fonts[i], "rb");
         if (!f) continue;
@@ -668,6 +679,9 @@ uint8_t *kbicons_make(const char *path, uint64_t *len) {
         } while (FindNextFileA(fh, &fd));
         FindClose(fh);
     }
+#else
+    mkdir("cache", 0755);
+    mkdir("cache/kbicons", 0755);
 #endif
     char tmp[520];
     snprintf(tmp, sizeof tmp, "%s.tmp", cp);

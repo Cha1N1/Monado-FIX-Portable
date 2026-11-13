@@ -65,13 +65,13 @@ bool plat_remove_tree(const char *dir);      // rm -rf
 // Name of the host function containing pc (guest functions are f_<addr>), NULL if unknown.
 const char *plat_symbol(uint64_t pc, uint64_t *offset);
 void plat_print_backtrace(void);
-// [XCDE] T122: the instruction pointer of another host thread (suspended for the read); 0 if unknown
+// [XCDE] T122/T-SCENE-SYNC: sample a peer instruction pointer; 0 if unavailable.
 uint64_t plat_thread_pc(void *pthread_handle);
 int plat_cpu_count(void);  // [XCDE] logical CPUs the process may use (affinity)
 void plat_thread_background(void);  // [XCDE] T160: the calling thread runs below normal priority (build workers)
 void plat_thread_audio(void);  // [XCDE] the calling thread feeds the audio device: above the game threads
 void plat_thread_name(const char *name);  // names the calling thread (profiler, debugger)
-int plat_thread_backtrace(void *pthread_handle, uint64_t *pcs, int max);  // (same, the whole host call stack)
+int plat_thread_backtrace(void *pthread_handle, uint64_t *pcs, int max);  // full stack where supported; Linux returns one sampled PC
 void plat_fatal_notice(void);  // a fatal error is about to end the process: tell the user (Windows release: message box)
 void plat_crash_handler_install(void);  // per thread where the OS needs it (alternate signal stack)
 // Called by the crash handler (runtime/dispatch.c): true = fault handled (watchpoint), resume.
