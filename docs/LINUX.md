@@ -20,8 +20,12 @@ Arch / CachyOS: `pacman -S clang sdl3 vulkan-headers vulkan-icd-loader shaderc o
 ```bash
 scripts/build_linux.sh --check        # dependencies only
 scripts/build_linux.sh                # targets/ -> generated/ -> build/linux/monado
-build/linux/monado targets            # from the repository root (xcde.ini, cache/, saves are relative to it)
+build/linux/monado-launcher           # the launcher: settings, shader precompilation, PLAY
+build/linux/monado targets            # or the game directly, from the repository root (xcde.ini, cache/, saves)
 ```
+
+The launcher alone: `tools/launcher/build_linux.sh`. Its reports are zipped with `bsdtar` (libarchive);
+"Open folder" uses the desktop's file manager (`xdg-open`).
 
 `scripts/build_linux.sh --runtime-only` compiles the runtime without game files (CI / quick checks).
 `JOBS=<n>` limits parallel game-code compilation; unchanged chunks are not recompiled.

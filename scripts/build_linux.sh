@@ -89,4 +89,5 @@ flush_jobs
 trap - INT TERM
 read -r -a libs <<< "$(pkg-config --libs "${packages[@]}")"
 "$CXX" -o build/linux/monado "${objects[@]}" "${libs[@]}" -pthread -ldl -lm -rdynamic
-echo 'Built build/linux/monado'
+tools/launcher/build_linux.sh
+echo 'Built build/linux/monado and build/linux/monado-launcher'
