@@ -226,7 +226,10 @@ static void ui(void) {
     Settings opening=g_settings, quality_before=g_settings;
     ImGuiViewport *vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->Size.x * 0.5f, vp->Size.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(fminf(vp->Size.x-24,940),fminf(vp->Size.y-24,720)), ImGuiCond_Always);
+    // [XCDE] the font and spacing grow with the output height (font_h: 22 px per 1080 lines), so the window does too:
+    // a fixed 940 x 720 crammed the menu at 1440p / 4K. 1080p and below keep 940 x 720.
+    const float menu_scale = fmaxf(1.0f, vp->Size.y / 1080.0f);
+    ImGui::SetNextWindowSize(ImVec2(fminf(vp->Size.x-24,940*menu_scale),fminf(vp->Size.y-24,720*menu_scale)), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.92f);
     ImGui::Begin(T("Opciones  (F1 / Esc para volver al juego)"), nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
                  ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
@@ -471,9 +474,28 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
         io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
         font_h = fmaxf(16.0f, h / 1080.0f * 22.0f);
-        if (!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", font_h, nullptr, io.Fonts->GetGlyphRangesDefault()))
-            io.Fonts->AddFontDefault();
-        monado_theme(font_h / 16.0f);
+        {   // [XCDE] the first installed one of these; ImGui asserts (aborts) on a missing font file, so check first.
+            // The Windows path alone made every Linux start abort on its first frame with the FPS counter on.
+#ifdef _WIN32
+            static const char *fonts[] = {"C:\\Windows\\Fonts\\segoeui.ttf"};
+#else
+            static const char *fonts[] = {"/usr/share/fonts/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+                                          "/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                                          "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"};
+#endif
+            ImFont *font = nullptr;
+            for (const char *f : fonts) {
+                FILE *probe = fopen(f, "rb");
+                if (!probe) continue;
+                fclose(probe);
+                if ((font = io.Fonts->AddFontFromFileTTF(f, font_h, nullptr, io.Fonts->GetGlyphRangesDefault()))) break;
+            }
+            if (!font) io.Fonts->AddFontDefault();
+        }
+        // [XCDE] the launcher's look (navy panels, crimson selection, teal accents), as a floating window over the game
+        monado_launcher_theme(font_h / 16.0f);
+        ImGui::GetStyle().WindowRounding = 12.0f * font_h / 16.0f;
+        ImGui::GetStyle().WindowBorderSize = 1.0f;
         if (!vk_imgui_backend_init()) { ImGui::DestroyContext(ctx); ctx = nullptr; open_ = false; return; }
         ImGui_ImplVulkan_CreateFontsTexture();
     }
