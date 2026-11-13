@@ -49,7 +49,7 @@ rt=(loader dispatch kernel ipc fnprof platform/linux services/fs services/romfs_
     host/stubs host/settings_ini host/stubs_gfx
     host/gamelib_static host/main_boot diag/diag diag/sampler diag/watchdog diag/crashdump paths)
 nvn=(astc cmdbuf formats maxwell/translate objects output_scale smaa_data tegra texpatch vulkan/device vulkan/exec
-     vulkan/precompile vulkan/shaders vulkan/textures vulkan/temporal vulkan/fsr4)
+     vulkan/precompile vulkan/shaders vulkan/textures vulkan/temporal vulkan/fsr4 vulkan/vkq)
 for f in "${nvn[@]}"; do rt+=("nvn/$f"); done
 for f in "${rt[@]}"; do
   obj="$rtdir/${f//\//_}.o"

@@ -30,7 +30,7 @@ set(RT_UNITS loader dispatch kernel ipc fnprof services/fs services/romfs_virtua
     host/stubs host/settings_ini host/stubs_gfx host/gamelib_static host/main_boot diag/diag diag/sampler diag/watchdog
     diag/crashdump paths)
 set(NVN_UNITS astc cmdbuf formats maxwell/translate objects output_scale smaa_data tegra texpatch vulkan/device
-    vulkan/exec vulkan/precompile vulkan/shaders vulkan/textures vulkan/temporal)
+    vulkan/exec vulkan/precompile vulkan/shaders vulkan/textures vulkan/temporal vulkan/vkq)
 set(IMGUI third_party/imgui)
 set(UI_SOURCES ${IMGUI}/imgui.cpp ${IMGUI}/imgui_draw.cpp ${IMGUI}/imgui_tables.cpp ${IMGUI}/imgui_widgets.cpp
     ${IMGUI}/backends/imgui_impl_vulkan.cpp runtime/nvn/vulkan/imgui_glue.cpp runtime/ui/menu_vk.cpp)

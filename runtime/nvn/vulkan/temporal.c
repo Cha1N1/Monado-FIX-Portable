@@ -19,6 +19,7 @@
 #include "../../diag/diag.h"
 #include "../../settings.h"
 #include "temporal.h"
+#include "vkq.h"  // [XCDE] T-LINUX-THREE: drain before the SDKs record into the command buffer
 #include "fsr4.h"  // [XCDE] T-FSR4-LITE (Linux)
 #include "ffx_api/ffx_api.h"
 #include "ffx_api/ffx_upscale.h"
@@ -484,6 +485,7 @@ static PFN_vkVoidFunction VKAPI_PTR ffx_proc(VkDevice d, const char *name) {
 }
 static bool fsr_context(uint32_t ow, uint32_t oh) {
     if (fsr_ctx && fsr_w == ow && fsr_h == oh) return true;
+    vkq_drain();
     if (fsr_ctx) { vkDeviceWaitIdle(g_vk.dev); ffx_destroy(&fsr_ctx, NULL); fsr_ctx = NULL; }
     struct ffxCreateBackendVKDesc be = {.header = {.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK},
                                         .vkDevice = g_vk.dev, .vkPhysicalDevice = g_vk.phys, .vkDeviceProcAddr = ffx_proc};
@@ -718,12 +720,14 @@ VkImageView tmp_upscale(VkCommandBuffer cb, TexBackend *color, VkImageView color
         f.depth = (MonadoFsr4Image){img[2].b.image, img[2].v, rw, rh};
         f.output = (MonadoFsr4Image){img[3].b.image, img[3].v, ow, oh};
         f.jitter[0] = jit_out[0]; f.jitter[1] = jit_out[1];
+        vkq_drain();  // the component records straight into cb: the queued commands go first
         ok = fsr4_record(&f);
     } else if (use_dlss()) {
         extern bool dlss_evaluate(VkCommandBuffer cb, const TexBackend *color, const TexBackend *mv, const TexBackend *depth,
                                   const TexBackend *out, const TexBackend *hud, const float jitter[2], bool reset, const TmpCamera *cam,
                                   const double reproj[16]);
         // [XCDE] T260: img[5] = the reactive mask (moving pixels, see tmp_prep.frag): DLSS's "bias current colour" hint
+        vkq_drain();
         ok = dlss_evaluate(cb, &img[0].b, &img[1].b, &img[2].b, &img[3].b, env_int("XCDE_TMP_NO_REACTIVE") ? NULL : &img[5].b, jit_out, reset,
                            cam, reproj);
     } else if (ffx_load() && fsr_context(ow, oh)) {
@@ -765,11 +769,13 @@ VkImageView tmp_upscale(VkCommandBuffer cb, TexBackend *color, VkImageView color
         d.cameraFovAngleVertical = p11 != 0 ? 2.0f * atanf(1.0f / fabsf(p11)) : 0.785f;
         d.viewSpaceToMetersFactor = 1.0f;
         d.flags = FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB | (env_int("XCDE_TMP_DEBUG") ? FFX_UPSCALE_FLAG_DRAW_DEBUG_VIEW : 0);
+        vkq_drain();
         ffxReturnCode_t r = ffx_dispatch(&fsr_ctx, &d.header);
         ok = r == FFX_API_RETURN_OK;
         if (!ok) { static int n; if (n++ < 5) LOG("[tmp] FSR dispatch failed: %u\n", r); }
     }
     vk_full_barrier(cb);
+    vkq_drain();
     fg_frame(cb, ok, cam, jit_out, rw, rh, dt, reset);
     if (env_int("XCDE_TMP_LOG") && (frames++ % 60) == 0)
         LOG("[tmp] %ux%u -> %ux%u jitter %.3f %.3f (%u phases) %s%s near %.3f fov %.1f proj11 %.3f\n", rw, rh, ow, oh, jit_out[0],

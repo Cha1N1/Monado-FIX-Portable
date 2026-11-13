@@ -1,0 +1,141 @@
+// [XCDE] T-LINUX-THREE: adapted from weeping-of-the-empire fe2345e8. Builds on Linux and Windows (winpthread).
+// Copyright (c) 2026 daniel-madrid-07. MIT; third_party/weeping-of-the-empire/LICENSE.
+// Deferred command recording: the render thread spent much of its time inside the Vulkan driver emitting commands.
+// With the recording worker on (default on Linux; LARECOMP_VKQ=1 / 0 forces it) every
+// vkCmd* / vkBegin/EndCommandBuffer call below is packed into a ring and replayed in order by one "vk-record" thread, as
+// DXVK's CS thread does; the caller only copies the arguments. vk_submit_extra drains the ring before vkQueueSubmit2.
+// Function-like macros: "(vkCmdDraw)(...)" (parenthesised name) still calls the real function (vkq_impl.h does).
+#pragma once
+#include <stddef.h>
+#include <vulkan/vulkan.h>
+
+// The dispatch macros of vk.h (T250: core 1.3 or KHR entry points) are replaced below by the queued versions; the
+// record thread then calls g_vk.dispatch itself. Include vk.h first so its definitions are the ones replaced.
+#ifdef __cplusplus
+extern "C" {
+#endif
+#include "vk.h"
+#ifdef __cplusplus
+}
+#endif
+#undef vkCmdBeginRendering
+#undef vkCmdEndRendering
+#undef vkCmdPipelineBarrier2
+#undef vkCmdWriteTimestamp2
+
+#if defined(__linux__) || defined(_WIN32)
+#ifdef __cplusplus
+extern "C" {
+#endif
+void vkq_drain(void);   // wait until the record thread has replayed everything queued so far (no-op when off)
+int vkq_enabled(void);
+
+VkResult q_vkBeginCommandBuffer(VkCommandBuffer, const VkCommandBufferBeginInfo *);
+VkResult q_vkEndCommandBuffer(VkCommandBuffer);
+void q_vkCmdDraw(VkCommandBuffer, uint32_t, uint32_t, uint32_t, uint32_t);
+void q_vkCmdDrawIndexed(VkCommandBuffer, uint32_t, uint32_t, uint32_t, int32_t, uint32_t);
+void q_vkCmdDispatch(VkCommandBuffer, uint32_t, uint32_t, uint32_t);
+void q_vkCmdBindPipeline(VkCommandBuffer, VkPipelineBindPoint, VkPipeline);
+void q_vkCmdBindDescriptorSets(VkCommandBuffer, VkPipelineBindPoint, VkPipelineLayout, uint32_t, uint32_t, const VkDescriptorSet *,
+                               uint32_t, const uint32_t *);
+void q_vkCmdPushConstants(VkCommandBuffer, VkPipelineLayout, VkShaderStageFlags, uint32_t, uint32_t, const void *);
+void q_vkCmdBindVertexBuffers(VkCommandBuffer, uint32_t, uint32_t, const VkBuffer *, const VkDeviceSize *);
+void q_vkCmdBindIndexBuffer(VkCommandBuffer, VkBuffer, VkDeviceSize, VkIndexType);
+void q_vkCmdSetViewport(VkCommandBuffer, uint32_t, uint32_t, const VkViewport *);
+void q_vkCmdSetScissor(VkCommandBuffer, uint32_t, uint32_t, const VkRect2D *);
+void q_vkCmdSetBlendConstants(VkCommandBuffer, const float[4]);
+void q_vkCmdSetDepthBias(VkCommandBuffer, float, float, float);
+void q_vkCmdSetDepthBiasEnable(VkCommandBuffer, VkBool32);
+void q_vkCmdSetDepthTestEnable(VkCommandBuffer, VkBool32);
+void q_vkCmdSetDepthWriteEnable(VkCommandBuffer, VkBool32);
+void q_vkCmdSetDepthCompareOp(VkCommandBuffer, VkCompareOp);
+void q_vkCmdSetStencilTestEnable(VkCommandBuffer, VkBool32);
+void q_vkCmdSetStencilOp(VkCommandBuffer, VkStencilFaceFlags, VkStencilOp, VkStencilOp, VkStencilOp, VkCompareOp);
+void q_vkCmdSetStencilCompareMask(VkCommandBuffer, VkStencilFaceFlags, uint32_t);
+void q_vkCmdSetStencilWriteMask(VkCommandBuffer, VkStencilFaceFlags, uint32_t);
+void q_vkCmdSetStencilReference(VkCommandBuffer, VkStencilFaceFlags, uint32_t);
+void q_vkCmdSetCullMode(VkCommandBuffer, VkCullModeFlags);
+void q_vkCmdSetFrontFace(VkCommandBuffer, VkFrontFace);
+void q_vkCmdSetPrimitiveTopology(VkCommandBuffer, VkPrimitiveTopology);
+void q_vkCmdSetPrimitiveRestartEnable(VkCommandBuffer, VkBool32);
+void q_vkCmdBeginRendering(VkCommandBuffer, const VkRenderingInfo *);
+void q_vkCmdEndRendering(VkCommandBuffer);
+void q_vkCmdPipelineBarrier2(VkCommandBuffer, const VkDependencyInfo *);
+void q_vkCmdCopyBuffer(VkCommandBuffer, VkBuffer, VkBuffer, uint32_t, const VkBufferCopy *);
+void q_vkCmdFillBuffer(VkCommandBuffer, VkBuffer, VkDeviceSize, VkDeviceSize, uint32_t);
+void q_vkCmdCopyImage(VkCommandBuffer, VkImage, VkImageLayout, VkImage, VkImageLayout, uint32_t, const VkImageCopy *);
+void q_vkCmdCopyBufferToImage(VkCommandBuffer, VkBuffer, VkImage, VkImageLayout, uint32_t, const VkBufferImageCopy *);
+void q_vkCmdCopyImageToBuffer(VkCommandBuffer, VkImage, VkImageLayout, VkBuffer, uint32_t, const VkBufferImageCopy *);
+void q_vkCmdBlitImage(VkCommandBuffer, VkImage, VkImageLayout, VkImage, VkImageLayout, uint32_t, const VkImageBlit *, VkFilter);
+void q_vkCmdResolveImage(VkCommandBuffer, VkImage, VkImageLayout, VkImage, VkImageLayout, uint32_t, const VkImageResolve *);
+void q_vkCmdClearColorImage(VkCommandBuffer, VkImage, VkImageLayout, const VkClearColorValue *, uint32_t, const VkImageSubresourceRange *);
+void q_vkCmdClearDepthStencilImage(VkCommandBuffer, VkImage, VkImageLayout, const VkClearDepthStencilValue *, uint32_t,
+                                   const VkImageSubresourceRange *);
+void q_vkCmdClearAttachments(VkCommandBuffer, uint32_t, const VkClearAttachment *, uint32_t, const VkClearRect *);
+void q_vkCmdResetQueryPool(VkCommandBuffer, VkQueryPool, uint32_t, uint32_t);
+void q_vkCmdWriteTimestamp2(VkCommandBuffer, VkPipelineStageFlags2, VkQueryPool, uint32_t);
+void q_vkCmdBeginQuery(VkCommandBuffer, VkQueryPool, uint32_t, VkQueryControlFlags);
+void q_vkCmdEndQuery(VkCommandBuffer, VkQueryPool, uint32_t);
+// vkCmdSetAttachmentFeedbackLoopEnableEXT through its function pointer (queued in order like the rest)
+void q_set_fbl(PFN_vkCmdSetAttachmentFeedbackLoopEnableEXT fn, VkCommandBuffer cb, VkImageAspectFlags m);
+// vkCmdWriteBufferMarkerAMD through its function pointer (exec.c hang breadcrumbs; queued in order like the rest)
+void q_mark(PFN_vkCmdWriteBufferMarkerAMD fn, VkCommandBuffer cb, VkPipelineStageFlagBits st, VkBuffer buf, VkDeviceSize off, uint32_t v);
+// vkCmdSetCheckpointNV through its function pointer (exec.c hang breadcrumbs; queued in order like the rest)
+void q_checkpoint(PFN_vkCmdSetCheckpointNV fn, VkCommandBuffer cb, const void *marker);
+
+void vkq_stats(char *, size_t);
+void q_vkCmdBindVertexBuffers2(VkCommandBuffer, uint32_t, uint32_t, const VkBuffer *, const VkDeviceSize *, const VkDeviceSize *, const VkDeviceSize *);
+#ifdef __cplusplus
+}
+#endif
+#define vkCmdBindVertexBuffers2(...) q_vkCmdBindVertexBuffers2(__VA_ARGS__)
+#define vkBeginCommandBuffer(...) q_vkBeginCommandBuffer(__VA_ARGS__)
+#define vkEndCommandBuffer(...) q_vkEndCommandBuffer(__VA_ARGS__)
+#define vkCmdDraw(...) q_vkCmdDraw(__VA_ARGS__)
+#define vkCmdDrawIndexed(...) q_vkCmdDrawIndexed(__VA_ARGS__)
+#define vkCmdDispatch(...) q_vkCmdDispatch(__VA_ARGS__)
+#define vkCmdBindPipeline(...) q_vkCmdBindPipeline(__VA_ARGS__)
+#define vkCmdBindDescriptorSets(...) q_vkCmdBindDescriptorSets(__VA_ARGS__)
+#define vkCmdPushConstants(...) q_vkCmdPushConstants(__VA_ARGS__)
+#define vkCmdBindVertexBuffers(...) q_vkCmdBindVertexBuffers(__VA_ARGS__)
+#define vkCmdBindIndexBuffer(...) q_vkCmdBindIndexBuffer(__VA_ARGS__)
+#define vkCmdSetViewport(...) q_vkCmdSetViewport(__VA_ARGS__)
+#define vkCmdSetScissor(...) q_vkCmdSetScissor(__VA_ARGS__)
+#define vkCmdSetBlendConstants(...) q_vkCmdSetBlendConstants(__VA_ARGS__)
+#define vkCmdSetDepthBias(...) q_vkCmdSetDepthBias(__VA_ARGS__)
+#define vkCmdSetDepthBiasEnable(...) q_vkCmdSetDepthBiasEnable(__VA_ARGS__)
+#define vkCmdSetDepthTestEnable(...) q_vkCmdSetDepthTestEnable(__VA_ARGS__)
+#define vkCmdSetDepthWriteEnable(...) q_vkCmdSetDepthWriteEnable(__VA_ARGS__)
+#define vkCmdSetDepthCompareOp(...) q_vkCmdSetDepthCompareOp(__VA_ARGS__)
+#define vkCmdSetStencilTestEnable(...) q_vkCmdSetStencilTestEnable(__VA_ARGS__)
+#define vkCmdSetStencilOp(...) q_vkCmdSetStencilOp(__VA_ARGS__)
+#define vkCmdSetStencilCompareMask(...) q_vkCmdSetStencilCompareMask(__VA_ARGS__)
+#define vkCmdSetStencilWriteMask(...) q_vkCmdSetStencilWriteMask(__VA_ARGS__)
+#define vkCmdSetStencilReference(...) q_vkCmdSetStencilReference(__VA_ARGS__)
+#define vkCmdSetCullMode(...) q_vkCmdSetCullMode(__VA_ARGS__)
+#define vkCmdSetFrontFace(...) q_vkCmdSetFrontFace(__VA_ARGS__)
+#define vkCmdSetPrimitiveTopology(...) q_vkCmdSetPrimitiveTopology(__VA_ARGS__)
+#define vkCmdSetPrimitiveRestartEnable(...) q_vkCmdSetPrimitiveRestartEnable(__VA_ARGS__)
+#define vkCmdBeginRendering(...) q_vkCmdBeginRendering(__VA_ARGS__)
+#define vkCmdEndRendering(...) q_vkCmdEndRendering(__VA_ARGS__)
+#define vkCmdPipelineBarrier2(...) q_vkCmdPipelineBarrier2(__VA_ARGS__)
+#define vkCmdCopyBuffer(...) q_vkCmdCopyBuffer(__VA_ARGS__)
+#define vkCmdFillBuffer(...) q_vkCmdFillBuffer(__VA_ARGS__)
+#define vkCmdCopyImage(...) q_vkCmdCopyImage(__VA_ARGS__)
+#define vkCmdCopyBufferToImage(...) q_vkCmdCopyBufferToImage(__VA_ARGS__)
+#define vkCmdCopyImageToBuffer(...) q_vkCmdCopyImageToBuffer(__VA_ARGS__)
+#define vkCmdBlitImage(...) q_vkCmdBlitImage(__VA_ARGS__)
+#define vkCmdResolveImage(...) q_vkCmdResolveImage(__VA_ARGS__)
+#define vkCmdClearColorImage(...) q_vkCmdClearColorImage(__VA_ARGS__)
+#define vkCmdClearDepthStencilImage(...) q_vkCmdClearDepthStencilImage(__VA_ARGS__)
+#define vkCmdClearAttachments(...) q_vkCmdClearAttachments(__VA_ARGS__)
+#define vkCmdResetQueryPool(...) q_vkCmdResetQueryPool(__VA_ARGS__)
+#define vkCmdWriteTimestamp2(...) q_vkCmdWriteTimestamp2(__VA_ARGS__)
+#define vkCmdBeginQuery(...) q_vkCmdBeginQuery(__VA_ARGS__)
+#define vkCmdEndQuery(...) q_vkCmdEndQuery(__VA_ARGS__)
+
+#else
+static inline void vkq_drain(void) {}
+static inline int vkq_enabled(void) { return 0; }
+static inline void vkq_stats(char *out, size_t n) { if (n) out[0] = 0; }
+#endif

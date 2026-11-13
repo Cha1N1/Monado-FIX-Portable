@@ -74,7 +74,7 @@ def main():
 
     sources = ['host/settings_ini.c', 'hle/framepace.c', 'hle/party.c', 'hle/bindings.c', 'services/fs.c', 'diag/diag.c', 'nvn/objects.c', 'services/romfs_virtual.c', 'nvn/output_scale.c',
                'nvn/vulkan/device.c', 'nvn/vulkan/exec.c', 'nvn/vulkan/shaders.c',
-               'nvn/vulkan/textures.c', 'nvn/vulkan/precompile.c', 'nvn/vulkan/temporal.c',
+               'nvn/vulkan/textures.c', 'nvn/vulkan/precompile.c', 'nvn/vulkan/temporal.c', 'nvn/vulkan/vkq.c',
                'nvn/vulkan/imgui_glue.cpp', 'ui/menu_vk.cpp', 'nvn/vulkan/dlss.cpp']
     for source in sources:
         cpp = source.endswith('.cpp')

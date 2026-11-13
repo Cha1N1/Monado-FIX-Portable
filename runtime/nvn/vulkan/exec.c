@@ -24,6 +24,7 @@
 #include "../../kernel.h"
 #include "shaders.h"
 #include "vk.h"
+#include "vkq.h"  // [XCDE] T-LINUX-THREE: ordered recording worker
 #include "cliff_batch.h"  // [XCDE] T-CLIFF-BATCH
 #include "bloom_prefilter.h"  // [XCDE] T-BLOOM-PREFILTER
 #include "bloom.h"  // [XCDE] T-WATER-BLOOM
@@ -467,6 +468,7 @@ static void begin_cb(VkCommandBuffer *cb, bool *begun) {
     if (!*cb) {
         VkCommandBufferAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, .commandPool = g_vk.pool,
                                           .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1};
+        vkq_drain();  // [XCDE] the command pool is also used by the recording worker
         VK_CHECK(vkAllocateCommandBuffers(g_vk.dev, &ai, cb));
     }
     VkCommandBufferBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
@@ -662,6 +664,7 @@ void vk_submit_extra(VkSemaphore wait, VkSemaphore signal, VkCommandBuffer extra
     {
         PROF_T0();
         dl_note("submit %llu", (unsigned long long)submit_seq + 1);
+        vkq_drain();  // [XCDE] every queued command recorded before submission
         VkResult sr = vkQueueSubmit2(g_vk.queue, 1, &si, VK_NULL_HANDLE);
         if (sr == VK_ERROR_DEVICE_LOST) vk_devlost_dump();
         VK_CHECK(sr);
@@ -5282,6 +5285,7 @@ static int g_cs_n;  // (compute program table below)
 // address (the old Prog / Pipe objects are leaked, so pipeline keys holding their pointers can't collide), compute
 // programs, shared copies - and the heap import: its pages are replaced (re-imported on first use).
 void vk_exec_reset(void) {
+    vkq_drain();  // [XCDE] release nothing queued recording still references
     memset(descriptor_cache,0,sizeof descriptor_cache);
     memset(gpu_frames,0,sizeof gpu_frames); gpu_last_tag=0; gpu_last_ms=-1;
     for (int i=0;i<SUBS;i++) subs[i].ts=subs[i].upload_ts=false;

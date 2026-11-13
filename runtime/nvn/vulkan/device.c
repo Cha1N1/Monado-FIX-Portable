@@ -12,6 +12,7 @@
 
 #include "../../paths.h"
 #include "../../settings.h"
+#include "vkq.h"  // [XCDE] T-LINUX-THREE
 #include "../../ui/menu.h"
 #include "vk.h"
 #include "temporal.h"
@@ -804,6 +805,7 @@ static void create_swapchain(void) {
 }
 
 static void recreate_swapchain(void) {
+    vkq_drain();  // [XCDE] queued recording must finish before idle / reset
     sc_wait_idle(g_vk.dev);
     create_swapchain();
 }
@@ -1443,6 +1445,7 @@ void backend_present(NvnTexture *t) {
         if (menu_at < 0) menu_at = getenv("LARECOMP_MENU_AT") ? atol(getenv("LARECOMP_MENU_AT")) : 0;
         if (menu_at && (long)total_frames + 1 == menu_at) { extern void menu_test_open(void); menu_test_open(); }
         menu_fps_tick(SDL_GetTicksNS()); // once per native frame, outside repeat/FG paths
+        vkq_drain();  // [XCDE] ImGui records directly into this command buffer
         menu_render((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height);
         vk_frame_end(shot ? "build/window.png" : xshot);
         {   // XCDE_PRESENT_STATS=1: game frame intervals (first present of each), every 120 frames
@@ -1469,6 +1472,7 @@ void backend_present(NvnTexture *t) {
             extern void vk_present_redraw(VkCommandBuffer cb);
             if (!vk_frame_begin(black)) break;
             vk_present_redraw(vk_cmd());
+            vkq_drain();
             menu_render((void *)vk_cmd(), g_vk.sc_extent.width, g_vk.sc_extent.height);
             vk_frame_end(NULL);
         }
@@ -1614,6 +1618,7 @@ static void quick_exit_handler(void) {
     if (trace < 0) trace = getenv("LARECOMP_VK_TRACE") != NULL;
     if (trace) LOG("[vk] exit: waiting for the GPU\n");
     if (g_vk.dev) {
+        vkq_drain();
         sc_wait_idle(g_vk.dev);
         if (trace) LOG("[vk] exit: saving the pipeline cache\n");
         for (int i = 0; i < 500 && atomic_load(&pc_saving); i++) SDL_Delay(10);  // (a periodic save still writing)
@@ -1687,6 +1692,7 @@ void backend_init(void) {
 // ---- in-place reboot (runtime/main.c teardown; main thread, guest threads stopped)
 void backend_reset(void) {
     if (!g_vk.dev) return;
+    vkq_drain();  // [XCDE] queued recording must finish before idle / reset
     sc_wait_idle(g_vk.dev);
     extern void vk_textures_reset(void);
     extern void vk_exec_reset(void);
