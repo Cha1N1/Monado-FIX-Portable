@@ -16,6 +16,8 @@
 #include "../diag/diag.h"
 #include "../platform.h"
 #include "../settings.h"
+#include "footstep_repeat.h"
+#include <stdatomic.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -488,6 +490,138 @@ uint32_t xcde_frames_gt(uint32_t n) {
     static int off = -1;
     if (off < 0) off = getenv("XCDE_FRAMES30_OFF") != NULL;
     return off ? n : xcde_frame_threshold_current(n);
+}
+
+// XCDE 2.0.0: follower locomotion blends can rewind/restart their animation
+// repeatedly above 30 FPS. The game's marker cache resets on those changes,
+// replaying both foot contacts, sometimes on consecutive render frames.
+// Retain contact history per physical foot across those resets. The interval
+// comes from the current looping clip and playback rate, not a fixed SFX cap.
+// This hook runs after the game's own marker eligibility/cache check.
+bool xcde_footstep_marker(Cpu *c, uint64_t action, uint64_t marker) {
+    static _Atomic int enabled = -1;
+    int on = atomic_load_explicit(&enabled, memory_order_relaxed);
+    if (on < 0) {
+        const char *e = getenv("XCDE_FOOTSTEP_REPEAT");
+        on = !e || atoi(e) != 0;
+        atomic_store_explicit(&enabled, on, memory_order_relaxed);
+    }
+    if (!on || (g_settings.fps > 0 && g_settings.fps <= 30)) return true;  // the game's own rate: nothing to guard
+    // Only the authored ground-contact markers used by the party's feet.
+    if (*(volatile uint8_t *)(uintptr_t)(marker + 0xa) > 1) return true;
+    const char *bone = (const char *)(uintptr_t)(marker + 0x1c);
+    if (memcmp(bone, "JLft_", 5) || bone[6] || (bone[5] != 'L' && bone[5] != 'R')) return true;
+    unsigned foot = bone[5] == 'R';
+
+    uint64_t actor = *(volatile uint64_t *)(uintptr_t)(action + 0x38);
+    if (!actor) return true;
+    uint32_t handle = *(volatile uint32_t *)(uintptr_t)(actor + 0x34);
+    // Resolve the existing field group without enabling the optional heap
+    // scanner. The leader and all actors outside its deployed followers pass.
+    uint64_t owner = *(volatile uint64_t *)(uintptr_t)(action + 8);
+    uint64_t context = owner ? *(volatile uint64_t *)(uintptr_t)(owner + 8) : 0;
+    uint64_t pm = context ? *(volatile uint64_t *)(uintptr_t)(context + 0x38) : 0;
+    uint64_t group = pm ? field_group(c, pm) : 0;
+    if (!group) return true;
+    uint64_t count = *(volatile uint64_t *)(uintptr_t)(group + 0x730);
+    if (count < 2 || count > 3) return true;
+    bool follower = false;
+    for (unsigned i = 1; i < count; i++)
+        follower |= *(volatile uint32_t *)(uintptr_t)(group + 0x6a0 + i * 0x30) == handle;
+    if (!follower) return true;
+
+    // Mirror f_70003f4690's active action/layer lookup. That routine has
+    // already resolved this binding, so no resource is loaded by the hook.
+    int32_t layer = *(volatile int32_t *)(uintptr_t)(action + 0x1c4);
+    if (layer < 0 || layer > 1) return true;
+    uint64_t track = action + (uint64_t)layer * 0x138;
+    int32_t active = *(volatile int32_t *)(uintptr_t)(track + 0x2d0);
+    if (active < 0 || active > 1) return true;
+    int32_t animation = *(volatile int32_t *)(uintptr_t)(track + (uint64_t)active * 0x78 + 0x200);
+    uint64_t bindings = *(volatile uint64_t *)(uintptr_t)(action + 0x78);
+    uint64_t nbindings = *(volatile uint64_t *)(uintptr_t)(action + 0x80);
+    if (!bindings || animation < 0 || (uint64_t)animation >= nbindings) return true;
+    uint64_t node = *(volatile uint64_t *)(uintptr_t)(bindings + (uint64_t)animation * 0x20 + 8);
+    if (!node || !(*(volatile uint8_t *)(uintptr_t)(node + 0x94) & 2)) return true;
+    uint64_t clip = *(volatile uint64_t *)(uintptr_t)(node + 0x18);
+    uint64_t header = clip ? *(volatile uint64_t *)(uintptr_t)(clip + 0x18) : 0;
+    if (!header) return true;
+    uint32_t frames = *(volatile uint32_t *)(uintptr_t)(header + 0x2c);
+    // f_700076d1e0 multiplies (frames - 1) by this seconds/frame value.
+    float frame_seconds = *(volatile float *)(uintptr_t)(header + 0x28);
+    float speed = fabsf(*(volatile float *)(uintptr_t)(node + 0x88));
+    if (frames < 3 || !isfinite(frame_seconds) || !isfinite(speed) || frame_seconds <= 0 || speed <= 0) return true;
+    // Find the preceding contact for this foot in the active action's authored
+    // marker list. Some clips contain several contacts per cycle; preserve
+    // those instead of assuming every foot appears only once in the loop.
+    uint64_t resource = *(volatile uint64_t *)(uintptr_t)(action + 0x58);
+    uint64_t state = *(volatile uint64_t *)(uintptr_t)(track + 0x1d8);
+    if (!resource || !state) return true;
+    uint32_t index = *(volatile uint32_t *)(uintptr_t)(state + 0x10);
+    uint64_t states = *(volatile uint64_t *)(uintptr_t)(resource + 0x10);
+    uint64_t nstates = *(volatile uint64_t *)(uintptr_t)(resource + 0x18);
+    if (!states || index >= nstates) return true;
+    uint64_t keys = *(volatile uint64_t *)(uintptr_t)(states + (uint64_t)index * 0xa0 + 8);
+    if (!keys) return true;
+    uint64_t cursor = keys + *(volatile uint16_t *)(uintptr_t)keys;
+    double cycle = (frames - 1.0) * frame_seconds;
+    uint16_t frame = *(volatile uint16_t *)(uintptr_t)(marker + 8);
+    double at = frame ? frame / 30.0 : cycle;
+    if (at > cycle) return true;
+    double separation = cycle;
+    bool found = false, ended = false;
+    for (unsigned i = 0; i < 512; i++) {
+        uint16_t size = *(volatile uint16_t *)(uintptr_t)cursor;
+        uint16_t type = *(volatile uint16_t *)(uintptr_t)(cursor + 2);
+        // Match f_70003eed80: types 0/1 end the list; control records
+        // above 0x14 are skipped, not terminators.
+        if (type <= 1) { ended = true; break; }
+        if (size < 8 || size > 4096) return true;
+        found |= cursor == marker;
+        if (type == 0xf && size >= 0x23 &&
+            *(volatile uint8_t *)(uintptr_t)(cursor + 0xa) <= 1 &&
+            !memcmp((const void *)(uintptr_t)(cursor + 0x1c), bone, 7)) {
+            uint16_t previous = *(volatile uint16_t *)(uintptr_t)(cursor + 8);
+            double before = previous ? previous / 30.0 : cycle;
+            if (before > cycle) return true;
+            double gap = at - before;
+            if (gap <= 0) gap += cycle;
+            if (gap < separation) separation = gap;
+        }
+        cursor += size;
+    }
+    if (!found || !ended) return true;
+    // One authored frame of tolerance accommodates the discrete marker sample.
+    double seconds = (separation - 1.0 / 30.0) / speed;
+    if (!(seconds >= 0.05 && seconds <= 5.0)) return true;
+    uint64_t period = (uint64_t)(seconds * 1e9);
+    uint64_t now = diag_deterministic() ? diag_now_ns() : plat_now_ns();
+
+    typedef struct {
+        uint64_t action, actor, group;
+        uint32_t handle;
+        FootstepRepeat feet[2];
+    } Contact;
+    static Contact contacts[8];
+    static atomic_flag lock = ATOMIC_FLAG_INIT;
+    while (atomic_flag_test_and_set_explicit(&lock, memory_order_acquire)) {}
+    unsigned slot = 0;
+    for (unsigned i = 0; i < 8; i++) {
+        if (contacts[i].action == action && contacts[i].actor == actor &&
+            contacts[i].group == group && contacts[i].handle == handle) { slot = i; break; }
+        if (contacts[i].feet[0].last_ns + contacts[i].feet[1].last_ns <
+            contacts[slot].feet[0].last_ns + contacts[slot].feet[1].last_ns) slot = i;
+    }
+    Contact *s = &contacts[slot];
+    if (s->action != action || s->actor != actor || s->group != group || s->handle != handle)
+        *s = (Contact){.action = action, .actor = actor, .group = group, .handle = handle};
+    bool accept = footstep_repeat_accept(&s->feet[foot], now, period);
+    atomic_flag_clear_explicit(&lock, memory_order_release);
+    static _Atomic bool reported;
+    if (!accept && !atomic_exchange_explicit(&reported, true, memory_order_relaxed))
+        LOG("[footstep] suppressing repeated follower contacts; authored stride %.1f ms (XCDE_FOOTSTEP_REPEAT=0 disables)\n",
+            period / 1e6);
+    return accept;
 }
 
 // [XCDE] T240 debugger: map jump on request. The scripts' "mapJump" native (f_7000512b50, script binding table at

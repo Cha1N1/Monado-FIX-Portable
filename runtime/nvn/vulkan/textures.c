@@ -437,11 +437,10 @@ static void create_image(NvnTexture *t, TexBackend *b) {
             if (!format_supports(vf, VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) flags |= VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
         }
     }
-    // [XCDE] v12 (amd_fix cost, #7): with VK_EXT_attachment_feedback_loop_layout an image that can be an attachment may
-    // also be sampled in the same draw that writes it (resolve_feedback then stays on the direct path on RDNA 3).
-    // The bit must be decided before vkCreateImage (vk_tex(t, true) creates lazily: an image made without the bit
-    // would have to be recreated, so every attachment-capable image gets it up front when the device has the feature).
-    if (g_vk.feedback_loop && (usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)))
+    // [XCDE] #7: with VK_EXT_attachment_feedback_loop_layout a colour attachment may be sampled by the draw that writes
+    // it, in VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT (exec.c feedback_layout). The bit must be decided
+    // before vkCreateImage. Depth feedback always reads a copy, so depth images keep their compression.
+    if (g_vk.feedback_loop && (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
         usage |= VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
     b->has_storage = (usage & VK_IMAGE_USAGE_STORAGE_BIT) != 0;
     // [XCDE] spec_lowend_gpu R6b (LASRecomp 03ee802): a mutable image without a format list loses colour compression
@@ -662,6 +661,7 @@ static uint64_t fnv_sample(const uint8_t *p, uint64_t n) {
 
 static pthread_mutex_t pending_lock = PTHREAD_MUTEX_INITIALIZER;
 
+void vk_feedback_write_boundary(void);  // [XCDE] #7 (exec.c): a host write ends cached same-frame feedback reads
 static void upload_pending(TexBackend *b) {
     pthread_mutex_lock(&pending_lock);
     void *px = b->pending_rgba;
@@ -669,6 +669,7 @@ static void upload_pending(TexBackend *b) {
     b->pending_rgba = NULL;
     pthread_mutex_unlock(&pending_lock);
     if (!px) return;
+    if (b->gpu_owned) vk_feedback_write_boundary();
     if (w > b->width) w = b->width;
     if (h > b->height) h = b->height;
     VkSpan s = vk_transient_copy(px, (uint64_t)stride * h, 16);
@@ -848,6 +849,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
             up_tp_ns / 1e6, up_wc_ns / 1e6, up_hash_ns / 1e6, up_cmd_ns / 1e6, up_tr_ns / 1e6, up_cp_ns / 1e6, (unsigned)t->flags, (unsigned long long)t->stride);
 }
 static void upload_texture_(NvnTexture *t, TexBackend *b) {
+    if (b->gpu_owned) vk_feedback_write_boundary();
     if (!t->addr || t->target == 10) return;
     if (dz_nchecks) dz_check_poll();  // (XCDE_DZ_CHECK)
     uint64_t frame = vk_frame_counter();

@@ -23,6 +23,7 @@
 #include "../../runtime/ui/gpu_picker.h"
 #include "../../runtime/ui/theme.h"
 #include "../../runtime/ui/quality_controls.h"
+#include "../../runtime/grass_lod.h"
 // [XCDE] GitHub #18: the build ids of the game NSOs this exe's code was lifted from (gen.py writes these
 // with the functions). Older checkouts without them build fine, just without the version check below.
 #if __has_include("../../generated/main/main_id.h")
@@ -113,6 +114,7 @@ struct Cfg {
     unsigned effects_off=0;
     int gpu_profile = 0, gpu_gpl = -1;
     int occlusion = -1;     // [XCDE][FSR3] -1 automatic (off on AMD iGPUs), 0 off, 1 on (xcde.ini occlusion)
+    int grass_lod = GRASS_DEFAULT;  // [XCDE] grass draw distance preset (xcde.ini grass_lod)
     int amd_fix = -1;       // issue #7: -1 automatic (on for AMD RDNA 3), 0 off, 1 on (xcde.ini amd_fix)
     int session_fix = -1;   // issue #25: -1 automatic (worker stays on), 0 off, 1 on = no async render worker (xcde.ini session_fix)
     bool gpu_memory_budget = true, gpu_performance = false, gpu_keep_heavy = false;
@@ -463,6 +465,7 @@ static void load() {
         else if (!strcmp(k, "gpu_gpl")) g.gpu_gpl = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
         else if (!strcmp(k, "gpu_memory_budget")) g.gpu_memory_budget = atoi(v) != 0;
         else if (!strcmp(k, "occlusion")) g.occlusion = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
+        else if (!strcmp(k, "grass_lod")) g.grass_lod = grass_lod_parse(v);
         else if (!strcmp(k, "amd_fix")) g.amd_fix = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
         else if (!strcmp(k, "session_fix")) g.session_fix = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
         else if (!strcmp(k, "rumble")) g.rumble = atoi(v) != 0;
@@ -506,6 +509,7 @@ static bool save() {
         g.gpu_uuid, g.gpu_index, g.gpu_profile ? "compatibility" : "auto", g.gpu_gpl < 0 ? "auto" : g.gpu_gpl ? "on" : "off",
         g.gpu_memory_budget, xcde_quality_name(g.quality_preset), g.gpu_keep_heavy);
     fprintf(f, "occlusion = %s\n", g.occlusion == 1 ? "on" : g.occlusion == 0 ? "off" : "auto");
+    fprintf(f, "grass_lod = %s\n", grass_lod_ini[grass_lod_valid(g.grass_lod)]);
     fprintf(f, "amd_fix = %s\n", g.amd_fix == 1 ? "on" : g.amd_fix == 0 ? "off" : "auto");
     fprintf(f, "session_fix = %s\n", g.session_fix == 1 ? "on" : g.session_fix == 0 ? "off" : "auto");
     fprintf(f,"low_memory = %d\ndynamic_min_height = %d\ndynamic_max_height = %d\neffects_off = %u\n",g.gpu_performance,g.dynamic_min_height,g.dynamic_max_height,g.effects_off);
@@ -1019,6 +1023,12 @@ static void tab_graphics() {
                           "Desactivado: imagen nítida (combínalo con SMAA para los bordes)."));
     ImGui::Checkbox(T("Antialiasing temporal (TAA) del juego"), &g.taa);
     ImGui::SetItemTooltip(T("Solo el TAA, sin tocar el desenfoque de movimiento ni el del pelo.\nDesactivado: quita el emborronado del TAA (combínalo con SMAA para los bordes)."));
+    g.grass_lod = grass_lod_valid(g.grass_lod);  // [XCDE] grass draw distance (also live in F1)
+    monado_combo(g.ui_lang ? "Grass distance" : "Distancia de la hierba", &g.grass_lod,
+                 g.ui_lang ? grass_lod_labels : grass_lod_labels_es, GRASS_PRESET_COUNT);
+    ImGui::SetItemTooltip("%s", g.ui_lang
+        ? "Keeps grass visible farther away. Higher settings cost FPS. Original keeps High's nearby detail at the original distance; Low halves reach. Also live in F1."
+        : "Mantiene la hierba visible más lejos. Los valores altos cuestan FPS. Original conserva el detalle cercano de Alta a la distancia original; Baja reduce el alcance a la mitad. También en vivo en F1.");
     ImGui::Checkbox(g.ui_lang ? "On-screen FPS counter" : "Contador FPS en pantalla", &g.fps_overlay);
     ImGui::Checkbox(T("Mostrar FPS en la barra de título"), &g.show_fps);
     ImGui::SeparatorText(T("Velocidad"));
