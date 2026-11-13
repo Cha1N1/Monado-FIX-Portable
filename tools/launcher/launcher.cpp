@@ -354,6 +354,23 @@ static const char *const k_en[][2] = {
     {"No se pudo crear el reporte (falta tar.exe de Windows)", "Could not create the report (Windows' tar.exe is missing)"},
     {"No se pudo crear el reporte", "Could not create the report"}, {"Reporte creado: ", "Report created: "},
     {" (adjúntalo al reportar el problema)", " (attach it to the bug report)"},
+    {"Vibración del mando", "Gamepad vibration"},
+    {"Activa el motor del mando cuando el juego manda vibración (por ejemplo en combate).\n"
+     "También se puede cambiar dentro del juego, en el menú, pestaña Controles.",
+     "Turns on the controller's motor when the game sends vibration (for example in battle).\n"
+     "It can also be changed in the game, in the menu's Controls tab."},
+    {"Resuelve lo que se ve tras el suelo / el suelo que desaparece con FSR 3 en algunas GPUs.\n"
+     "Automático: solo lo apaga en las gráficas integradas AMD donde falla.",
+     "Resolves what is seen behind the floor / the floor disappearing with FSR 3 on some GPUs.\n"
+     "Automatic: only turns it off on AMD integrated graphics where it fails."},
+    {"Puntos de color de 1-2 px en gráficas AMD RDNA 3 (issue #7).\n"
+     "Automático: solo se activa en RDNA 3. Desactivado si te baja el rendimiento.",
+     "1-2 px colour dots on AMD RDNA 3 graphics (issue #7).\n"
+     "Automatic: only enabled on RDNA 3. Turn it off if performance drops."},
+    {"Evita que modelos y texturas se corrompan en partidas largas.\n"
+     "Desactiva el hilo de render asíncrono (algo menos de rendimiento).",
+     "Prevents models and textures from corrupting in long sessions.\n"
+     "Disables the async render thread (slightly less performance)."},
     {"Idioma del launcher", "Launcher language"},
 };
 static const char *T(const char *es) {
@@ -863,7 +880,7 @@ static void tab_graphics() {
         static const char *amd_ui[] = {"Automático (RDNA 3: activado)", "Desactivado", "Activado"};
         static const char *amd_en[] = {"Automatic (RDNA 3: on)", "Off", "On"};
         int fix = g.amd_fix == 0 ? 1 : g.amd_fix == 1 ? 2 : 0;
-        if (monado_combo(g.ui_lang ? "Fix de parpadeo AMD (al reiniciar)" : "AMD flicker fix (restart)",
+        if (monado_combo(g.ui_lang ? "AMD flicker fix (restart)" : "Fix de parpadeo AMD (al reiniciar)",
                          &fix, g.ui_lang ? amd_en : amd_ui, 3))
             g.amd_fix = fix == 1 ? 0 : fix == 2 ? 1 : -1;
         ImGui::SetItemTooltip(T("Puntos de color de 1-2 px en gráficas AMD RDNA 3 (issue #7).\n"
@@ -873,7 +890,7 @@ static void tab_graphics() {
         static const char *ss_ui[] = {"Automático (activado)", "Desactivado", "Activado"};
         static const char *ss_en[] = {"Automatic (on)", "Off", "On"};
         int ss = g.session_fix == 0 ? 1 : g.session_fix == 1 ? 2 : 0;
-        if (monado_combo(g.ui_lang ? "Compatibilidad de sesión larga (al reiniciar)" : "Long-session compatibility (restart)",
+        if (monado_combo(g.ui_lang ? "Long-session compatibility (restart)" : "Compatibilidad de sesión larga (al reiniciar)",
                          &ss, g.ui_lang ? ss_en : ss_ui, 3))
             g.session_fix = ss == 1 ? 0 : ss == 2 ? 1 : -1;
         ImGui::SetItemTooltip(T("Evita que modelos y texturas se corrompan en partidas largas.\n"

@@ -193,6 +193,17 @@ static const char *const k_en[][2] = {
     {"Estos cambios requieren reiniciar el juego.", "These changes require restarting the game."},
     {"Memoria local reportada", "Reported local memory"}, {"Memoria compartida / no local", "Shared / non-local memory"},
     {"Guardar", "Save"}, {"Volver al juego", "Back to the game"}, {"Guardado en xcde.ini", "Saved to xcde.ini"},
+    {"Presupuesto de memoria (VMA / controlador)", "Memory budget (VMA / driver)"},
+    {"GPU integrada: la memoria del sistema es compartida; el tamaño del heap Vulkan no equivale a VRAM dedicada.",
+     "Integrated GPU: system memory is shared; the Vulkan heap size is not dedicated VRAM."},
+    {"Selección y compatibilidad (al reiniciar)", "Selection and compatibility (after a restart)"},
+    {"Culling por oclusión (al reiniciar)", "Occlusion culling (after a restart)"},
+    {"Fix de parpadeo AMD (al reiniciar)", "AMD flicker fix (after a restart)"},
+    {"Compatibilidad de sesión larga (al reiniciar)", "Long-session compatibility (after a restart)"},
+    {"Automático (AMD integrada: apagada)", "Automatic (AMD integrated: off)"},
+    {"Automático (RDNA 3: activado)", "Automatic (RDNA 3: on)"},
+    {"Automático (activado)", "Automatic (on)"},
+    {"Desactivada", "Off"}, {"Desactivado", "Off"}, {"Activada", "On"}, {"Activado", "On"},
 };
 static const char *T(const char *es) {
     if (g_settings.ui_lang != 1) return es;
