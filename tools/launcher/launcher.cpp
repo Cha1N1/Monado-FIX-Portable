@@ -35,6 +35,19 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#define GAME_EXE "build/xcde.exe"
+#else
+// [XCDE] T-LINUX: the same launcher on Linux. The game is build/linux/monado (scripts/build_linux.sh); processes are
+// started with posix_spawn, folders and messages go through SDL3.
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/resource.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char **environ;
+#define GAME_EXE "build/linux/monado"
 #endif
 
 // ------------------------------------------------------------------ settings (same keys as settings_ini.c)
@@ -369,6 +382,40 @@ static TList TL(const char *const *a, int n) { TList t{}; for (int i = 0; i < n 
 static std::string g_root;  // repository root (where targets/, build/, xcde.ini live)
 
 static std::string path(const char *rel) { return g_root + "/" + rel; }
+static bool exists(const char *rel) {
+    SDL_PathInfo pi;
+    return SDL_GetPathInfo(path(rel).c_str(), &pi);
+}
+#ifndef _WIN32
+// [XCDE] T-LINUX: start args[0] in g_root with stdout/stderr in log (truncated), in its own process group; 0 = failed.
+static pid_t spawn_logged(const std::vector<std::string> &args, const std::string &log, bool background) {
+    std::vector<char *> av;
+    for (const std::string &a : args) av.push_back(const_cast<char *>(a.c_str()));
+    av.push_back(NULL);
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addchdir_np(&fa, g_root.c_str());
+    if (!log.empty()) {
+        posix_spawn_file_actions_addopen(&fa, 1, log.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        posix_spawn_file_actions_adddup2(&fa, 1, 2);
+    }
+    posix_spawnattr_t at;
+    posix_spawnattr_init(&at);
+    posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP);
+    posix_spawnattr_setpgroup(&at, 0);
+    pid_t pid = 0;
+    int err = posix_spawnp(&pid, av[0], &fa, &at, av.data(), environ);
+    posix_spawnattr_destroy(&at);
+    posix_spawn_file_actions_destroy(&fa);
+    if (err) { errno = err; return 0; }
+    if (background) setpriority(PRIO_PROCESS, (id_t)pid, 10);
+    return pid;
+}
+static void open_folder(const std::string &dir) {
+    std::string url = "file://" + dir;
+    if (!SDL_OpenURL(url.c_str())) spawn_logged({"xdg-open", dir}, "", false);
+}
+#endif
 struct Mod { std::string name; bool on = true; bool present = true; };
 static std::vector<Mod> g_mods;  // (mods tab; xcde.ini mod_<name>)
 
@@ -494,10 +541,6 @@ static bool save() {
     return xcde_ini_commit(f, tmp, settings_path.c_str()) != 0;
 }
 
-static bool exists(const char *rel) {
-    SDL_PathInfo pi;
-    return SDL_GetPathInfo(path(rel).c_str(), &pi);
-}
 
 // [XCDE] GitHub #18: game files from another game version can't run on this build (the recompiled code
 // matches exactly one NSO revision): find it out here so the player sees a clear message in the launcher
@@ -574,6 +617,13 @@ static void launch() {
     CloseHandle(pi.hProcess);
     g_status = T("Juego iniciado. Registro: build/last_game.log");
     g_launched_ok = true;
+#else
+    std::string exe = path(GAME_EXE), log = path("build/last_game.log");
+    rename(log.c_str(), path("build/last_game.prev.log").c_str());  // [XCDE] T260: keep the previous run's log
+    pid_t pid = spawn_logged({exe, "targets"}, log, false);
+    if (!pid) { g_status = std::string("Could not start " GAME_EXE " (") + strerror(errno) + ")"; return; }
+    g_status = T("Juego iniciado. Registro: build/last_game.log");
+    g_launched_ok = true;
 #endif
 }
 
@@ -584,6 +634,8 @@ static void launch() {
 // when it was never done (once, a few minutes; "Omitir" skips it).
 #ifdef _WIN32
 static HANDLE g_pc_proc;
+#else
+static pid_t g_pc_proc;  // [XCDE] T-LINUX
 #endif
 static bool g_pc_then_play, g_pc_play_now;
 static float g_pc_frac;
@@ -599,14 +651,14 @@ static bool pc_done() {
     while (fgets(line, sizeof line, f)) sscanf(line, "exe %lld %lld", &sz, &mt);
     fclose(f);
     struct stat es;
-    if (stat(path("build/xcde.exe").c_str(), &es) != 0) return true;
+    if (stat(path(GAME_EXE).c_str(), &es) != 0) return true;
     return sz == (long long)es.st_size && mt == (long long)es.st_mtime;
 }
 static bool pc_running() {
 #ifdef _WIN32
     return g_pc_proc != NULL;
 #else
-    return false;
+    return g_pc_proc != 0;
 #endif
 }
 
@@ -643,6 +695,17 @@ static void pc_start(bool then_play) {
     g_pc_frac = 0;
     g_pc_text = T("Buscando shaders en los archivos del juego...");
     g_status = then_play ? T("Preparando shaders antes de la primera partida (solo esta vez)") : T("Precompilando shaders");
+#else
+    if (g_pc_proc) return;
+    SDL_CreateDirectory(path("cache").c_str());
+    remove(path("cache/precompile_progress.txt").c_str());
+    pid_t pid = spawn_logged({path(GAME_EXE), "--precompile", "targets"}, path("build/last_precompile.log"), true);
+    if (!pid) { g_status = std::string(T("No se pudo iniciar la precompilación (error ")) + strerror(errno) + ")"; return; }
+    g_pc_proc = pid;
+    g_pc_then_play = then_play;
+    g_pc_frac = 0;
+    g_pc_text = T("Buscando shaders en los archivos del juego...");
+    g_status = then_play ? T("Preparando shaders antes de la primera partida (solo esta vez)") : T("Precompilando shaders");
 #endif
 }
 
@@ -653,12 +716,18 @@ static void pc_stop() {
     WaitForSingleObject(g_pc_proc, 2000);
     CloseHandle(g_pc_proc);
     g_pc_proc = NULL;
+#else
+    if (!g_pc_proc) return;
+    kill(-g_pc_proc, SIGTERM);  // (its process group: the driver's shader threads too)
+    bool ended = false;
+    for (int i = 0; i < 20 && !ended; i++) { ended = waitpid(g_pc_proc, NULL, WNOHANG) == g_pc_proc; if (!ended) SDL_Delay(100); }
+    if (!ended) { kill(-g_pc_proc, SIGKILL); waitpid(g_pc_proc, NULL, 0); }
+    g_pc_proc = 0;
 #endif
 }
 
 // (every frame while it runs) progress from the file; at the end, the result and JUGAR if it was waiting
 static void pc_poll() {
-#ifdef _WIN32
     if (!g_pc_proc) return;
     static Uint64 last;
     Uint64 now = SDL_GetTicks();
@@ -682,16 +751,22 @@ static void pc_poll() {
         }
         fclose(f);
     }
+#ifdef _WIN32
     if (WaitForSingleObject(g_pc_proc, 0) != WAIT_OBJECT_0) return;
     DWORD code = 1;
     GetExitCodeProcess(g_pc_proc, &code);
     CloseHandle(g_pc_proc);
     g_pc_proc = NULL;
+#else
+    int st = 0;
+    if (waitpid(g_pc_proc, &st, WNOHANG) != g_pc_proc) return;
+    int code = WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+    g_pc_proc = 0;
+#endif
     // [XCDE] T240: a run that died while the driver was building (cache/precompile_inflight.bin left behind) starts
     // again by itself - the new run skips what was being built (precompile.c crash-safe) - up to 3 times
     static int retries;
-    DWORD att = GetFileAttributesA(path("cache/precompile_inflight.bin").c_str());
-    if (!(code == 0 && pc_done()) && att != INVALID_FILE_ATTRIBUTES && retries < 3) {
+    if (!(code == 0 && pc_done()) && exists("cache/precompile_inflight.bin") && retries < 3) {
         retries++;
         bool then_play = g_pc_then_play;
         pc_start(then_play);
@@ -701,7 +776,6 @@ static void pc_poll() {
     retries = 0;
     g_status = code == 0 && pc_done() ? T("Shaders precompilados") : T("La precompilación falló (registro: build/last_precompile.log)");
     if (g_pc_then_play) g_pc_play_now = true;
-#endif
 }
 
 // ------------------------------------------------------------------ remapping capture
@@ -804,7 +878,7 @@ static void tab_home() {
     ImGui::TextWrapped("%s",g.ui_lang ? "For modest hardware, start with Potato and a 30 FPS target. Quality and frame rate are independent." :
         "En equipos modestos, empieza con Patata y un objetivo de 30 FPS. La calidad y los FPS se eligen por separado.");
     ImGui::SeparatorText(g.ui_lang ? "Shader preparation" : "Preparación de shaders");
-    ImGui::BeginDisabled(pc_running() || !exists("build/xcde.exe") || *g_mismatch_desc);
+    ImGui::BeginDisabled(pc_running() || !exists(GAME_EXE) || *g_mismatch_desc);
     if (ImGui::Button(T("Precompilar shaders"))) pc_start(false);
     ImGui::EndDisabled();
     static uint64_t checked; static bool prepared;
@@ -1075,8 +1149,30 @@ static void tab_controls() {
 
 // Mods: every folder in mods/ with a romfs/ inside (runtime/services/romfs_virtual.c applies them alphabetically,
 // a later one wins for the same file); xcde.ini mod_<folder> = 0/1, on by default.
+#ifndef _WIN32
+// [XCDE] T-LINUX: the names in dir matching pattern (SDL_GlobDirectory, sorted as the Windows listing order is unspecified)
+static std::vector<std::string> list_dir(const char *rel, const char *pattern) {
+    std::vector<std::string> out;
+    int n = 0;
+    char **names = SDL_GlobDirectory(path(rel).c_str(), pattern, 0, &n);
+    for (int i = 0; names && i < n; i++) out.push_back(names[i]);
+    SDL_free(names);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+#endif
 static void scan_mods() {
     std::vector<Mod> found;
+#ifndef _WIN32
+    for (const std::string &name : list_dir("mods", "*")) {
+        SDL_PathInfo pi;
+        if (name[0] == '.' || !SDL_GetPathInfo(path(("mods/" + name + "/romfs").c_str()).c_str(), &pi) ||
+            pi.type != SDL_PATHTYPE_DIRECTORY) continue;
+        Mod m{name, true};
+        for (const Mod &o : g_mods) if (o.name == m.name) m.on = o.on;
+        found.push_back(m);
+    }
+#else
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA(path("mods\\*").c_str(), &fd);
     if (h != INVALID_HANDLE_VALUE) {
@@ -1091,6 +1187,7 @@ static void scan_mods() {
         } while (FindNextFileA(h, &fd));
         FindClose(h);
     }
+#endif
     std::sort(found.begin(), found.end(), [](const Mod &a, const Mod &b) { return a.name < b.name; });
     for (const Mod &o : g_mods) {  // (keep the settings of folders not present now)
         bool here = false;
@@ -1104,6 +1201,35 @@ static void scan_mods() {
 // run's and the previous one, build\last_game*.log), every other build\*.log, xcde.ini and the newest crash report (crash\, text + minidump).
 // No saves or game files. Zipped by the tar.exe that Windows 10+ ships; the folder opens when it is done.
 static void make_report() {
+#ifndef _WIN32
+    // [XCDE] T-LINUX: the same files, zipped by bsdtar (libarchive's tar: -a picks the format from .zip)
+    std::vector<std::string> files;
+    for (const char *f : {"build/last_game.log", "build/last_game.prev.log", "build/last_precompile.log", "build/launcher.log",
+                          "build/lasrecomp.log", "build/lasrecomp.prev.log", "xcde.ini"})
+        if (exists(f)) files.push_back(f);
+    for (const std::string &n : list_dir("build", "*.log")) {
+        std::string rel = "build/" + n;
+        if (std::find(files.begin(), files.end(), rel) == files.end()) files.push_back(rel);
+    }
+    std::vector<std::string> crashes = list_dir("crash", "crash_*.txt");
+    if (!crashes.empty()) files.push_back("crash/" + crashes.back());  // (crash_<stamp>.txt sorts by date)
+    if (files.empty()) { g_status = T("No hay nada que reportar todavía (ni logs ni xcde.ini)"); return; }
+    SDL_CreateDirectory(path("reports").c_str());
+    char stamp[32];
+    time_t now = time(NULL);
+    strftime(stamp, sizeof stamp, "%Y%m%d_%H%M%S", localtime(&now));
+    std::string zip = std::string("reports/xcde_report_") + stamp + ".zip";
+    std::vector<std::string> args = {"bsdtar", "-a", "-c", "-f", zip};
+    for (const std::string &f : files) args.push_back(f);
+    pid_t pid = spawn_logged(args, "", false);
+    int st = 1;
+    if (!pid || waitpid(pid, &st, 0) != pid || !WIFEXITED(st) || WEXITSTATUS(st)) {
+        g_status = "Could not create the report (bsdtar from libarchive is needed)";
+        return;
+    }
+    g_status = std::string(T("Reporte creado: ")) + zip + T(" (adjúntalo al reportar el problema)");
+    open_folder(path("reports"));
+#else
     std::vector<std::string> files;
     for (const char *f : {"build/last_game.log", "build/last_game.prev.log", "build/last_precompile.log", "build/launcher.log",
                           "build/lasrecomp.log", "build/lasrecomp.prev.log", "xcde.ini"})
@@ -1159,6 +1285,7 @@ static void make_report() {
     if (code) { g_status = T("No se pudo crear el reporte"); return; }
     g_status = std::string(T("Reporte creado: ")) + zip + T(" (adjúntalo al reportar el problema)");
     ShellExecuteA(NULL, "open", path("reports").c_str(), NULL, NULL, SW_SHOWNORMAL);
+#endif
 }
 
 static void tab_mods() {
@@ -1169,8 +1296,13 @@ static void tab_mods() {
                        "cambian el mismo archivo, gana el último. Los mods de código (exefs, parches .pchtxt / IPS) no "
                        "funcionan en esta versión recompilada."));
     if (ImGui::Button(T("Abrir carpeta de mods"))) {
+#ifdef _WIN32
         CreateDirectoryA(path("mods").c_str(), NULL);
         ShellExecuteA(NULL, "open", path("mods").c_str(), NULL, NULL, SW_SHOWNORMAL);
+#else
+        SDL_CreateDirectory(path("mods").c_str());
+        open_folder(path("mods"));
+#endif
     }
     ImGui::SameLine();
     if (ImGui::Button(T("Actualizar lista"))) scan_mods();
@@ -1211,9 +1343,14 @@ static int fail(const char *what) {
     char msg[1024];
     snprintf(msg, sizeof msg, "%s\n\n%s\n\n(build\\launcher.log)", what, SDL_GetError());
     llog("ERROR: %s: %s", what, SDL_GetError());
+#ifdef _WIN32
     MessageBoxA(NULL, msg, "Monado - Launcher", MB_OK | MB_ICONERROR);
+#else
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Monado - Launcher", msg, NULL);
+#endif
     return 1;
 }
+#ifdef _WIN32
 static LONG WINAPI crash_filter(EXCEPTION_POINTERS *e) {
     char msg[256];
     snprintf(msg, sizeof msg, "The launcher crashed (exception %#lx at %p).\n\n(build\\launcher.log)",
@@ -1222,20 +1359,28 @@ static LONG WINAPI crash_filter(EXCEPTION_POINTERS *e) {
     MessageBoxA(NULL, msg, "Monado - Launcher", MB_OK | MB_ICONERROR);
     return EXCEPTION_EXECUTE_HANDLER;
 }
+#endif
 
 int main(int argc, char **argv) {
     // root: the folder above the launcher's build/ folder (or the working directory)
     const char *base = SDL_GetBasePath();
     g_root = base ? base : ".";
     while (!g_root.empty() && (g_root.back() == '/' || g_root.back() == '\\')) g_root.pop_back();
+#ifndef _WIN32
+    if (g_root.size() > 6 && g_root.compare(g_root.size() - 6, 6, "/linux") == 0) g_root.resize(g_root.size() - 6);  // build/linux/
+#endif
     if (g_root.size() > 6 && (g_root.compare(g_root.size() - 6, 6, "\\build") == 0 || g_root.compare(g_root.size() - 6, 6, "/build") == 0))
         g_root.resize(g_root.size() - 6);
     // --shot <file.bmp> [tab] [precompile]: render a few frames of that tab, save the window as a BMP and quit (tests)
     const char *shot = argc > 2 && !strcmp(argv[1], "--shot") ? argv[2] : NULL;
     int shot_tab = argc > 3 ? atoi(argv[3]) : 0, frame_no = 0;
     bool shot_pc = shot && argc > 4 && !strcmp(argv[4], "precompile");  // (... <tab> precompile: the bar after ~5 s of a run)
+#ifdef _WIN32
     g_llog = fopen((g_root + "\\build\\launcher.log").c_str(), "w");
     SetUnhandledExceptionFilter(crash_filter);
+#else
+    g_llog = fopen((g_root + "/build/launcher.log").c_str(), "w");
+#endif
     llog("launcher start, root %s", g_root.c_str());
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         llog("SDL_Init with gamepads failed (%s): video only", SDL_GetError());
@@ -1264,7 +1409,18 @@ int main(int argc, char **argv) {
     if (shot && argc>5) { int h=std::clamp(atoi(argv[5]),540,2160); SDL_SetWindowSize(win,h*16/9,h); }
     SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     if (!shot) SDL_ShowWindow(win);
+#ifdef _WIN32
     if (!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 17.0f * scale)) io.Fonts->AddFontDefault();
+#else
+    {   // [XCDE] T-LINUX: a common installed sans-serif font, else ImGui's own
+        bool font = false;
+        for (const char *f : {"/usr/share/fonts/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+                              "/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                              "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"})
+            if (!font) { SDL_PathInfo pi; font = SDL_GetPathInfo(f, &pi) && io.Fonts->AddFontFromFileTTF(f, 17.0f * scale); }
+        if (!font) io.Fonts->AddFontDefault();
+    }
+#endif
     monado_theme(scale);
     ImGui_ImplSDL3_InitForSDLRenderer(win, ren);
     ImGui_ImplSDLRenderer3_Init(ren);
@@ -1272,7 +1428,7 @@ int main(int argc, char **argv) {
     check_game_version();  // [XCDE] GitHub #18: refuse launching on another game version's files
     if (shot && argc>4 && !strcmp(argv[4],"es")) g.ui_lang=0;
     bool have_game = exists("targets/exefs/main") || exists("targets/exefs");
-    bool have_exe = exists("build/xcde.exe");
+    bool have_exe = exists(GAME_EXE);
     bool run = true, launched = false;
     Cfg saved_cfg; memcpy(&saved_cfg,&g,sizeof g);
     int section=shot ? (shot_tab==4 ? 0 : shot_tab==5 ? 5 : shot_tab==0 ? 1 : shot_tab==1 ? 2 : shot_tab==2 ? 3 : 4) : 0;
