@@ -26,6 +26,7 @@
 #include "vk.h"
 #include "cliff_batch.h"  // [XCDE] T-CLIFF-BATCH
 #include "bloom_prefilter.h"  // [XCDE] T-BLOOM-PREFILTER
+#include "bloom.h"  // [XCDE] T-WATER-BLOOM
 #include "temporal.h"
 void vk_watch(VkImage dst, const char *site);  // [XCDE] debugging: log writes to a watched image
 static VkImage g_watch_img;
@@ -2156,11 +2157,27 @@ static const char *bloom_prefilter_src(uint64_t code) {
     return mode == 1 ? monado_bloom_prefilter_box_glsl : monado_bloom_prefilter_karis_glsl;
 }
 
+// [XCDE] T-WATER-BLOOM (bloom.h): the bloom chain's reconstruction (guest fragment program 0887965a4681061d) sums four
+// bilinear taps at the corners uv +- cb3[1].zw. Around a small, very bright source those four separated lobes show as
+// square / four-lobed halos (water highlights). The replacement keeps the authored radius, normalization and tint but
+// fills the footprint with a normalized 3x3 tent. Matched by the guest code like the prefilter above, so every
+// translated variant is replaced and the replacement has its own SPIR-V cache identity. XCDE_BLOOM_FILTER=0: original.
+static const char *bloom_tent_src(uint64_t code) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("XCDE_BLOOM_FILTER"); on = !e || atoi(e) != 0; }
+    if (!on || !code) return NULL;
+    if (hmix(1469598103934665603ull, (const void *)(uintptr_t)(code + 0x30), 0x200) != 0x0887965a4681061dull) return NULL;
+    static int reported;
+    if (!__atomic_exchange_n(&reported, 1, __ATOMIC_RELAXED)) LOG("[bloom] normalized tent reconstruction enabled\n");
+    return monado_bloom_tent_glsl;
+}
+
 static void compile_program(void *arg) {
     Prog *p = arg;
     size_t nv = 0, nf = 0;
     const char *fs_src = p->fi->msl;
     { const char *b = bloom_prefilter_src(p->src[1]); if (b) fs_src = b; }
+    { const char *b = bloom_tent_src(p->src[1]); if (b) fs_src = b; }
     char *fs_over = NULL;
     if (getenv("XCDE_GLSL_DIR")) {  // [XCDE] debugging: a hand-edited fragment shader (<dir>/<code addr>_fs.glsl) replaces the translated one
         char path[512];
