@@ -916,6 +916,7 @@ static bool gc_start(bool then_play) {
         return false;
     }
     SDL_CreateDirectory(path("gamebuild").c_str());
+    SDL_CreateDirectory(path("build").c_str());
     remove(path("gamebuild/progress.txt").c_str());
     std::string root = path("targets"), out = path("gamebuild"), log = path("build/last_gamebuild.log");
 #ifdef _WIN32
@@ -1043,6 +1044,7 @@ static void fp_start() {
     if (fp_running() || !fp_available()) return;
     std::string tool = fp_dir() + "/" FP_TOOL, out = path("fsr4"), log = path("build/last_fsr4prep.log");
     remove(path("fsr4-progress.txt").c_str());
+    SDL_CreateDirectory(path("build").c_str());  // (the log's folder: missing in a fresh data root)
 #ifdef _WIN32
     std::string cmd = "\"" + tool + "\" --out \"" + out + "\" --tools \"" + fp_dir() + "\"";
     STARTUPINFOA si = {};
