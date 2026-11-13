@@ -27,6 +27,6 @@ if (-not (Test-Path $py)) {
 }
 if (-not (Test-Path "$root\.venv\Scripts\python.exe")) { & $py -m venv "$root\.venv" }
 Write-Host 'Installing the recompiler packages (pip)...'
-& "$root\.venv\Scripts\python.exe" -m pip install -q --disable-pip-version-check lz4 capstone unicorn ziglang
+& "$root\.venv\Scripts\python.exe" -m pip install -q --disable-pip-version-check lz4 capstone unicorn ziglang==0.17.1
 
 Write-Host 'Done. Next: "Build Monado.bat" (or, in Git Bash: scripts/build_all.sh once targets\ holds your game files).'

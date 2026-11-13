@@ -35,25 +35,27 @@ for f in $NVN; do
 done
 # [XCDE] In-game settings overlay (F1): Dear ImGui + its Vulkan backend (third_party/imgui, MIT) and runtime/ui/menu_vk.cpp
 # (replaces the menu stub object)
+# [XCDE] Zig's C++ standard library ships its own C headers (string.h, math.h, ...). They have to be found before the
+# MSYS2 CRT headers, or libc++ mixes two libc header sets and fails to compile; -idirafter still finds SDL3/Vulkan/VMA.
 if pick ui/menu; then
   I=third_party/imgui
   rm -f build/nvn/host_menu_stub.o
   for f in $I/imgui.cpp $I/imgui_draw.cpp $I/imgui_tables.cpp $I/imgui_widgets.cpp $I/backends/imgui_impl_vulkan.cpp \
            runtime/nvn/vulkan/imgui_glue.cpp runtime/ui/menu_vk.cpp; do
     .venv/Scripts/python -m ziglang c++ -c $f -o build/nvn/ui_$(basename ${f%.cpp}).o -std=c++17 -O1 -march=x86_64_v2 \
-      -fvisibility=hidden -Iruntime -Iruntime/nvn -Iruntime/nvn/vulkan -I$I -I$I/backends -I/c/msys64/ucrt64/include -w \
+      -fvisibility=hidden -Iruntime -Iruntime/nvn -Iruntime/nvn/vulkan -I$I -I$I/backends -idirafter /c/msys64/ucrt64/include -w \
       || { echo "FAIL $f"; fail=1; }
   done
 fi
 # [XCDE] NVIDIA DLSS through Streamline (C++ headers, third_party/streamline, MIT)
 if pick nvn/vulkan/dlss; then
-  .venv/Scripts/python -m ziglang c++ -c runtime/nvn/vulkan/dlss.cpp -o build/nvn/nvn_vulkan_dlss.o -std=c++17     -O1 -march=x86_64_v2 -fvisibility=hidden -Iruntime -Iruntime/nvn -Ithird_party/streamline/include -I/c/msys64/ucrt64/include -w     || { echo "FAIL nvn/vulkan/dlss"; fail=1; }
+  .venv/Scripts/python -m ziglang c++ -c runtime/nvn/vulkan/dlss.cpp -o build/nvn/nvn_vulkan_dlss.o -std=c++17     -O1 -march=x86_64_v2 -fvisibility=hidden -Iruntime -Iruntime/nvn -Ithird_party/streamline/include -idirafter /c/msys64/ucrt64/include -w     || { echo "FAIL nvn/vulkan/dlss"; fail=1; }
 fi
 # [XCDE] Vulkan Memory Allocator (header-only, MSYS2 vulkan-memory-allocator) and the path helpers: built here with the
 # same baseline CPU as everything else. (Built by hand before: vma.o carried AVX-512 from the build PC's CPU, so the
 # game would stop with an illegal instruction on CPUs without it.)
 if pick nvn/vulkan/vma; then
-  .venv/Scripts/python -m ziglang c++ -c runtime/nvn/vulkan/vma.cpp -o build/nvn/vma.o -std=c++17 -O1 -march=x86_64_v2 -fvisibility=hidden -I/c/msys64/ucrt64/include -w || { echo "FAIL nvn/vulkan/vma"; fail=1; }
+  .venv/Scripts/python -m ziglang c++ -c runtime/nvn/vulkan/vma.cpp -o build/nvn/vma.o -std=c++17 -O1 -march=x86_64_v2 -fvisibility=hidden -idirafter /c/msys64/ucrt64/include -w || { echo "FAIL nvn/vulkan/vma"; fail=1; }
 fi
 if pick paths; then
   $Z -c runtime/paths.c -o build/nvn/paths.o $CF -DGAMELIB_ID='"dev"' || { echo "FAIL paths"; fail=1; }
