@@ -36,7 +36,7 @@ jobs:
       - name: Build tools and libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang lld ninja-build cmake pkg-config git glslang-tools \
+          sudo apt-get install -y --no-install-recommends clang-19 lld-19 ninja-build cmake pkg-config git glslang-tools \
             libvulkan-dev libshaderc-dev libopus-dev zlib1g-dev libavcodec-dev libavformat-dev libavutil-dev \
             libswscale-dev libswresample-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
             libxfixes-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols libdecor-0-dev libegl-dev \
@@ -77,8 +77,11 @@ jobs:
         env:
           VMA_INCLUDE_DIR: ${{ github.workspace }}/build/deps
           PYTHON: .venv/bin/python
+          CC: clang-19
+          CXX: clang++-19
         run: |
-          cmake --preset linux -B build/cmake/release -DMONADO_RELEASE=ON
+          # clang 19+: runtime/platform/linux.c checks __builtin_cpu_supports("cx16")
+          cmake --preset linux -B build/cmake/release -DMONADO_RELEASE=ON -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19
           cmake --build build/cmake/release
           test -f build/linux/libmonado_fsr3.so || { echo "::error::native FSR 3 was not built"; exit 1; }
           test -f build/linux/libmonado_fsr4.so || { echo "::error::native FSR 4 Lite was not built"; exit 1; }
@@ -107,10 +110,10 @@ jobs:
         shell: pwsh
     steps:
       - uses: actions/checkout@v4
-      - uses: msys2/setup-msys2@v2   # the MSYS2 UCRT64 libraries, where the scripts expect them (C:\msys64)
+      - uses: msys2/setup-msys2@v2   # the runner's own MSYS2 in C:\msys64, where the build expects the UCRT64 libraries
         with:
           msystem: UCRT64
-          location: C:\
+          release: false
           update: true
           install: >-
             mingw-w64-ucrt-x86_64-sdl3 mingw-w64-ucrt-x86_64-ffmpeg mingw-w64-ucrt-x86_64-vulkan-devel
