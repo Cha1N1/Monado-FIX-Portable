@@ -41,7 +41,7 @@ static bool fsr4_beside_exe(char *path, size_t n, const char *leaf) {
     strcpy(slash + 1, leaf);
     return true;
 }
-#ifdef __linux__
+#if defined(__linux__) || defined(_WIN32)
 bool fsr4_device_ok;
 static const MonadoFsr4Api *api;
 static char assets[4096];

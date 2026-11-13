@@ -17,6 +17,7 @@ step "4/5 Compiling the runtime and linking ${XCDE_EXE:-build/xcde.exe}"
 scripts/build_rt_gfx.sh
 exe=${XCDE_EXE:-build/xcde.exe}
 [ -f "$exe" ] || { echo "the link failed (see build/link_gfx.err)"; exit 1; }
+scripts/build_fsr4_windows.sh || echo "(continuing without FSR 4 Lite)"
 step "5/5 Building the launcher (build/xcde_launcher.exe)"
 tools/launcher/build.sh
 echo

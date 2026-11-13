@@ -11,7 +11,7 @@ RT="loader dispatch kernel ipc fnprof platform/windows services/fs services/romf
     services/hid_set services/kbicons services/misc services/audio services/hwopus hle/heaps hle/pl hle/vi hle/nvn_boot hle/fibers hle/input hle/party
     hle/bindings hle/movie hle/framepace hle/foliage_distance hle/foliage_pool hle/graphics host/stubs host/settings_ini host/stubs_gfx host/gamelib_static host/main_boot diag/diag diag/sampler diag/watchdog
     diag/crashdump"
-NVN="astc cmdbuf formats maxwell/translate objects output_scale smaa_data tegra texpatch vulkan/device vulkan/exec vulkan/vkq vulkan/precompile vulkan/shaders vulkan/textures vulkan/temporal"
+NVN="astc cmdbuf formats maxwell/translate objects output_scale smaa_data tegra texpatch vulkan/device vulkan/exec vulkan/vkq vulkan/precompile vulkan/shaders vulkan/textures vulkan/temporal vulkan/fsr4"
 mkdir -p build/rt build/nvn
 want="$*"
 pick() { [ -z "$want" ] || [[ " $want " == *" $1 "* ]]; }

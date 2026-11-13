@@ -228,6 +228,9 @@ def main():
     ap.add_argument('--with-cache', action='store_true',
                     help='also copy cache/spirv and cache/variants.bin (by default NO cache is copied: it is rebuilt on each PC)')
     ap.add_argument('--msys', help=r'MSYS2 UCRT64 bin folder (default C:\msys64\ucrt64\bin)')
+    ap.add_argument('--with-fsr4-assets', action='store_true',
+                    help='also copy the prepared FSR 4 Lite model files (build/fsr4/lite): AMD licence terms, '
+                         'third_party/fsr4_native/LICENSE-AMD-SDK.md; without them FSR 4 Lite is unavailable')
     ap.add_argument('--bundle-vulkan', action='store_true',
                     help='also copy MSYS2\'s vulkan-1.dll (by default the GPU driver\'s own loader is used)')
     a = ap.parse_args()
@@ -266,6 +269,16 @@ def main():
         shutil.copy2(e, os.path.join(out, 'build', os.path.basename(e)))
     for d in build_dlls:  # DLSS / FSR / Reflex / SDL...: loaded by name at run time
         shutil.copy2(d, os.path.join(out, 'build', os.path.basename(d)))
+    # [XCDE] T-FSR4-LITE: monado_fsr4.dll reads its prepared model files from <exe folder>/fsr4/lite. They come from
+    # AMD's SDK under its own terms, so (like make_appimage.py) they are only packaged when asked for.
+    if any(os.path.basename(d).lower() == 'monado_fsr4.dll' for d in build_dlls):
+        lite = os.path.join('build', 'fsr4', 'lite')
+        if a.with_fsr4_assets and os.path.isdir(lite):
+            copy_tree(lite, os.path.join(out, 'build', 'fsr4', 'lite'), 'FSR 4 Lite model files/')
+            shutil.copy2(os.path.join('third_party', 'fsr4_native', 'LICENSE-AMD-SDK.md'),
+                         os.path.join(out, 'build', 'fsr4', 'LICENSE-AMD-SDK.md'))
+        else:
+            print('  note: monado_fsr4.dll without its model files (--with-fsr4-assets): FSR 4 Lite will be unavailable')
     if os.path.isdir(os.path.join('build', 'dlss-licenses')):
         copy_tree(os.path.join('build', 'dlss-licenses'), os.path.join(out, 'build', 'dlss-licenses'), 'NVIDIA runtime licences/')
     if os.path.isfile(os.path.join('build', 'dlss-runtime.json')):

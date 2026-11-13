@@ -2,7 +2,7 @@
 #pragma once
 #include "fsr4_api.h"
 #include <stdbool.h>
-#ifdef __linux__  // [XCDE] native Linux component (scripts/build_fsr4_linux.sh)
+#if defined(__linux__) || defined(_WIN32)  // [XCDE] native component: scripts/build_fsr4_linux.sh / build_fsr4_windows.sh
 extern bool fsr4_device_ok;
 bool fsr4_available(void);
 bool fsr4_record(const MonadoFsr4Frame *frame);

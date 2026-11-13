@@ -30,7 +30,7 @@ set(RT_UNITS loader dispatch kernel ipc fnprof services/fs services/romfs_virtua
     host/stubs host/settings_ini host/stubs_gfx host/gamelib_static host/main_boot diag/diag diag/sampler diag/watchdog
     diag/crashdump paths)
 set(NVN_UNITS astc cmdbuf formats maxwell/translate objects output_scale smaa_data tegra texpatch vulkan/device
-    vulkan/exec vulkan/precompile vulkan/shaders vulkan/textures vulkan/temporal vulkan/vkq)
+    vulkan/exec vulkan/precompile vulkan/shaders vulkan/textures vulkan/temporal vulkan/vkq vulkan/fsr4)
 set(IMGUI third_party/imgui)
 set(UI_SOURCES ${IMGUI}/imgui.cpp ${IMGUI}/imgui_draw.cpp ${IMGUI}/imgui_tables.cpp ${IMGUI}/imgui_widgets.cpp
     ${IMGUI}/backends/imgui_impl_vulkan.cpp runtime/nvn/vulkan/imgui_glue.cpp runtime/ui/menu_vk.cpp)
@@ -40,7 +40,6 @@ if(WIN32)
   list(APPEND RT_UNITS platform/windows)
 else()
   list(APPEND RT_UNITS platform/linux)
-  list(APPEND NVN_UNITS vulkan/fsr4)
 endif()
 set(RT_SOURCES)
 foreach(u IN LISTS RT_UNITS)
@@ -109,6 +108,20 @@ if(WIN32)
   set(LAUNCHER_FLAGS -O2 ${MARCH} -std=c++17 -w "SHELL:-idirafter \"${MSYS2_PREFIX}/include\"")
   set(LAUNCHER_LIBS "${MSYS2_PREFIX}/lib/libSDL3.dll.a" "${MSYS2_PREFIX}/lib/libvulkan-1.dll.a")
   set(LAUNCHER_LINK_OPTIONS ${MARCH} -Wl,--subsystem,windows -static-libstdc++)
+
+  # scripts/build_fsr4_windows.sh: the optional native FSR 4 Lite component, loaded at run time beside xcde.exe
+  add_library(monado_fsr4 SHARED third_party/fsr4_native/fsr411.cpp third_party/fsr4_native/monado_adapter.cpp)
+  set_target_properties(monado_fsr4 PROPERTIES OUTPUT_NAME monado_fsr4 PREFIX "" RUNTIME_OUTPUT_DIRECTORY "${OUT}"
+                        LIBRARY_OUTPUT_DIRECTORY "${OUT}")
+  target_compile_options(monado_fsr4 PRIVATE -O2 ${MARCH} -std=c++20 -fvisibility=hidden -w
+                         "SHELL:-idirafter \"${MSYS2_PREFIX}/include\"")
+  target_include_directories(monado_fsr4 PRIVATE runtime/nvn/vulkan)
+  target_link_libraries(monado_fsr4 PRIVATE "${MSYS2_PREFIX}/lib/libvulkan-1.dll.a")
+  # the prepared model files (tools/prepare_fsr4_lite.py) go where the runtime looks: build/fsr4/lite
+  if(EXISTS "${ROOT}/build/fsr4/assets/lite")
+    add_custom_command(TARGET monado_fsr4 POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E copy_directory "${ROOT}/build/fsr4/assets/lite" "${ROOT}/build/fsr4/lite" VERBATIM)
+  endif()
 else()
   # =========================== Linux (pkg-config libraries; system clang, or zig cc) ===========================
   set(OUT "${ROOT}/build/linux")
