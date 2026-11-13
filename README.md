@@ -96,3 +96,4 @@ This repository (`Monado-FIX-Portable`) builds upon `vinitaison/Monado`'s fork (
 * `Ivanprestef2` (Ivan Prestef2) — *Asistido por Claude AI / Assisted by Claude AI*
 * [`Marval53`](https://github.com/Marval53) — *Colaborador / Contributor (Asistido por ChatGPT 6.1 Sol / Assisted by ChatGPT 6.1 Sol)*
 * [`Cha1N1`](https://github.com/Cha1N1) - *Colaborador (Fixes and linux version - Claude AI)*
+* [`9e9xh0`](https://github.com/9e9xh0) - *Colaborador (More resolucions and fixes - Claude AI)*
