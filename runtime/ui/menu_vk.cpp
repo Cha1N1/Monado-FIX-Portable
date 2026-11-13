@@ -20,6 +20,7 @@
 extern "C" {
 #include "../nvn/vulkan/vk.h"
 #include "../settings.h"
+#include "../hle/foliage_distance.h"
 #include "menu.h"
 bool vk_imgui_backend_init(void);
 void input_reset(void);
@@ -268,6 +269,26 @@ static void ui(void) {
             ImGui::Checkbox(T("Antialiasing y desenfoque de movimiento del juego (al reiniciar)"), &g_settings.game_blur);
             bool taa = !g_settings.taa_off;
             if (ImGui::Checkbox(T("Antialiasing temporal (TAA) del juego (al reiniciar)"), &taa)) g_settings.taa_off = !taa;
+            {   // [XCDE] grass draw distance: applied on the next foliage pass, no restart
+                const char *const *labels = g_settings.ui_lang ? grass_lod_labels : grass_lod_labels_es;
+                float grass_scale = xcde_foliage_requested_scale();
+                int grass_choice = grass_lod_from_scale(grass_scale);
+                char custom_grass[48];
+                snprintf(custom_grass, sizeof custom_grass, g_settings.ui_lang ? "Custom (%.2fx)" : "Personalizada (%.2fx)", grass_scale);
+                if (ImGui::BeginCombo(g_settings.ui_lang ? "Grass distance" : "Distancia de la hierba",
+                                      grass_choice < 0 ? custom_grass : labels[grass_choice])) {
+                    for (int i = 0; i < GRASS_PRESET_COUNT; ++i) {
+                        if (ImGui::Selectable(labels[i], i == grass_choice)) { g_settings.grass_lod = i; xcde_foliage_set_preset(i); }
+                        if (i == grass_choice) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip("%s", g_settings.ui_lang
+                    ? "Applies while playing, without restarting. Higher settings keep grass visible farther away and cost FPS.\n"
+                      "Original keeps High's nearby detail at the game's original distance. Low halves grass reach."
+                    : "Se aplica mientras juegas, sin reiniciar. Los valores altos mantienen la hierba visible más lejos y cuestan FPS.\n"
+                      "Original conserva el detalle cercano de Alta a la distancia original del juego. Baja reduce el alcance a la mitad.");
+            }
             ImGui::Checkbox(g_settings.ui_lang ? "On-screen FPS counter" : "Contador FPS en pantalla", &g_settings.fps_overlay);
             ImGui::Checkbox(T("Mostrar FPS en la barra de título"), &g_settings.show_fps);
             ImGui::SeparatorText(T("Velocidad"));
