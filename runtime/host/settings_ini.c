@@ -14,7 +14,7 @@ const char *const g_language_codes[N_LANGUAGES] = {"", "ja", "en-US", "fr", "de"
 const char *const g_language_names[N_LANGUAGES] = {"Auto", "Japanese", "English", "French", "German", "Italian", "Spanish",
                                                    "Chinese", "Korean", "Dutch", "Portuguese", "Russian",
                                                    "Chinese (Simplified)", "Chinese (Traditional)"};
-Settings g_settings = {.fps = 30, .fps_overlay = true, .upscaler_auto = true, .volume = 1.0f, .movie_audio = true, .res_mode = RES_MATCH, .upscaler = UPSCALE_FSR1, .upscale_quality = UQ_QUALITY, .game_blur = true, .vsync = true, .ui_lang = 1, .gpu_index = -1, .gpu_profile = GPU_PROFILE_AUTO, .gpu_gpl = GPU_GPL_AUTO, .occlusion = OCCL_AUTO, .amd_fix = AMD_FIX_AUTO, .session_fix = SESSION_FIX_AUTO, .gpu_memory_budget = true, .input_rumble = true};
+Settings g_settings = {.fps = 30, .fps_overlay = true, .upscaler_auto = true, .volume = 1.0f, .movie_audio = true, .res_mode = RES_MATCH, .upscaler = UPSCALE_FSR1, .upscale_quality = UQ_QUALITY, .upscale_sharpness = -1.0f, .game_blur = true, .vsync = true, .ui_lang = 1, .gpu_index = -1, .gpu_profile = GPU_PROFILE_AUTO, .gpu_gpl = GPU_GPL_AUTO, .occlusion = OCCL_AUTO, .amd_fix = AMD_FIX_AUTO, .session_fix = SESSION_FIX_AUTO, .gpu_memory_budget = true, .input_rumble = true};
 int g_window_w = 1280, g_window_h = 720;  // windowed size (settings.h)
 
 // [XCDE] Mods (runtime/services/romfs_virtual.c): xcde.ini `mod_<folder> = 0/1`; a folder not listed is on.
@@ -83,6 +83,9 @@ void settings_load(void) {
         } else if (!strcmp(k, "upscale_quality")) {
             static const char *q[] = {"native", "quality", "balanced", "performance", "ultra"};
             for (int i = 0; i < 5; i++) if (!strcmp(v, q[i])) g_settings.upscale_quality = i;
+        } else if (!strcmp(k, "upscale_sharpness")) {  // [XCDE] "default" or 0..1
+            float x = strcmp(v, "default") ? (float)atof(v) : -1.0f;
+            g_settings.upscale_sharpness = x < 0.0f ? -1.0f : x > 1.0f ? 1.0f : x;
         } else if (!strcmp(k, "frame_gen")) g_settings.frame_gen = atoi(v) != 0;
         else if (!strcmp(k, "cutscenes")) g_settings.cutscene_mode = !strcmp(v, "30") ? 1 : !strcmp(v, "30fg") ? 2 : 0;
         else if (!strcmp(k, "gpu_index")) { int n = atoi(v); g_settings.gpu_index = n < -1 ? -1 : n > 255 ? 255 : n; }
@@ -151,6 +154,8 @@ void settings_save(void) {
     static const char *uq[] = {"native", "quality", "balanced", "performance", "ultra"};
     fprintf(f, "upscaler = %s\nantialias = %s\n", g_settings.upscaler_auto ? "auto" : up[g_settings.upscaler >= 0 && g_settings.upscaler <= 4 ? g_settings.upscaler : 0],
             g_settings.antialias == AA_SMAA ? "smaa" : "off");
+    if (g_settings.upscale_sharpness < 0.0f) fprintf(f, "upscale_sharpness = default\n");  // [XCDE]
+    else fprintf(f, "upscale_sharpness = %.3f\n", g_settings.upscale_sharpness);
     fprintf(f, "upscale_quality = %s\nframe_gen = %d\n",
             uq[g_settings.upscale_quality >= 0 && g_settings.upscale_quality <= 4 ? g_settings.upscale_quality : 1], g_settings.frame_gen);
     fprintf(f, "depth_of_field = %d\n", !g_settings.dof_off);

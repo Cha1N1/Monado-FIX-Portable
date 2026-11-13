@@ -82,6 +82,7 @@ typedef struct {
     bool game_blur;      // [XCDE] the game's own AA / temporal AA / motion blur (lib_nx.ini; xcde.ini game_blur = 0/1)
     int upscale_quality; // [XCDE] UQ_*: FSR 3 / DLSS render size (xcde.ini upscale_quality = native|quality|balanced|performance|ultra)
     bool frame_gen;      // [XCDE] FSR 3 / DLSS frame generation (xcde.ini frame_gen = 0/1)
+    float upscale_sharpness; // [XCDE] RCAS strength 0 (off) .. 1 (max); < 0: each upscaler's own default (xcde_sharpness)
     int ui_lang;         // [XCDE] launcher and F1-menu language: 0 Spanish, 1 English (xcde.ini launcher_lang = es | en)
     int stick_deadzone;  // [XCDE] % of the stick's travel read as centred (xcde.ini stick_deadzone = 0-30, default 0: raw)
     int cutscene_mode;   // [XCDE] T224: 0 cutscenes at the FPS setting, 1 at 30, 2 at 30 + FSR 3 frame generation (xcde.ini cutscenes = same|30|30fg)
@@ -118,3 +119,10 @@ const char *settings_language_name(void);
 #ifdef __cplusplus
 }
 #endif
+
+// [XCDE] RCAS strength in FSR's 0..1 convention (attenuation = 2 - 2 * sharpness stops). Unset (< 0), each upscaler
+// keeps its previous fixed value: FSR 1 sharpened at 0.2 stops (= 0.9), FSR 3's dispatch used 0.3.
+static inline float xcde_sharpness(const Settings *s) {
+    if (s->upscale_sharpness >= 0.0f) return s->upscale_sharpness > 1.0f ? 1.0f : s->upscale_sharpness;
+    return s->upscaler == UPSCALE_FSR1 ? 0.9f : 0.3f;
+}

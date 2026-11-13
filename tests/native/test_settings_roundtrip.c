@@ -37,5 +37,11 @@ int main(int argc, char **argv) {
     char data[8192] = {0}; f = fopen(argv[1], "r"); assert(f);
     assert(fread(data, 1, sizeof data - 1, f)); fclose(f);
     assert(strstr(data, "future_plugin = preserve this"));
+    // [XCDE] RCAS strength: unset stays "default" (FSR 1 0.9 / FSR 3 0.3); an explicit value round-trips, 0 = off
+    assert(strstr(data, "upscale_sharpness = default") && g_settings.upscale_sharpness < 0.0f);
+    g_settings.upscaler = UPSCALE_FSR1; assert(xcde_sharpness(&g_settings) == 0.9f);
+    g_settings.upscaler = UPSCALE_FSR3; assert(xcde_sharpness(&g_settings) == 0.3f);
+    g_settings.upscale_sharpness = 0.0f; settings_save(); g_settings.upscale_sharpness = -1.0f; settings_load();
+    assert(g_settings.upscale_sharpness == 0.0f && xcde_sharpness(&g_settings) == 0.0f);
     assert(!remove(argv[1])); puts("settings round-trip: stable GPU ID, policies, unknown keys and default reset OK"); return 0;
 }

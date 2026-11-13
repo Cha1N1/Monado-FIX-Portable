@@ -7101,10 +7101,14 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
         float pe[8] = {iw / ow, ih / oh, 0.5f * iw / ow - 0.5f, 0.5f * ih / oh - 0.5f, iw, ih};
         VkImageView ei[3] = {v};
         post_pass(cb, "easu.frag", ei, 1, e, pe, false);
-        float pr[8] = {exp2f(-0.2f), 0, 0, 0, (float)ow, (float)oh};  // (sharpness 0.2 stops: AMD's default)
-        VkImageView ri_[3] = {post_view(e)};
-        post_pass(cb, "rcas.frag", ri_, 1, r, pr, false);
-        v = post_view(r);
+        v = post_view(e);
+        float sharp = xcde_sharpness(&g_settings);  // [XCDE] RCAS strength (default 0.9 = the previous 0.2 stops); 0 = off
+        if (sharp > 0.0f) {
+            float pr[8] = {exp2f(-(2.0f - 2.0f * sharp)), 0, 0, 0, (float)ow, (float)oh};
+            VkImageView ri_[3] = {v};
+            post_pass(cb, "rcas.frag", ri_, 1, r, pr, false);
+            v = post_view(r);
+        }
         upscaled = true;  // [XCDE] v12 #29: the SMAA below then runs at the output size, after the RCAS sharpening
     }
     // [XCDE] v12 #29: the SMAA moved AFTER the upscaler: at the render resolution it only saw the stairs that exist
