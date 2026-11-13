@@ -1,0 +1,40 @@
+#!/bin/sh
+# [XCDE] T-LINUX-APPIMAGE: the AppImage mount is read-only, so everything the game and the launcher write (xcde.ini,
+# cache/, saves, logs in build/) lives in a data folder outside it. That folder gets two links, refreshed at every
+# start, so the launcher and the game keep the repository layout they use everywhere else:
+#   <data>/targets           -> the game dump (exefs/ + romfs/)
+#   <data>/build/linux/monado -> the game executable inside this mount
+#   ./Monado-x86_64.AppImage [dump directory]       launcher
+#   ./Monado-x86_64.AppImage --play [dump directory] the game directly
+# The dump: the argument, else MONADO_GAME_ROOT, else targets/ next to the AppImage, else the one linked last time.
+# The data folder: MONADO_DATA_ROOT, else $XDG_DATA_HOME/lasrecomp (~/.local/share/lasrecomp, as runtime/paths.c).
+set -eu
+appdir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export LD_LIBRARY_PATH="$appdir/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export MONADO_FSR4_ASSET_DIR="${MONADO_FSR4_ASSET_DIR:-$appdir/usr/share/monado/fsr4}"
+export XCDE_VARIANTS_SEED="${XCDE_VARIANTS_SEED:-$appdir/usr/share/monado/variants_seed.bin}"
+direct=
+if [ "${1:-}" = --play ]; then direct=1; shift; fi
+case "${1:-}" in
+  -h|--help) echo "usage: ${APPIMAGE:-AppRun} [--play] [dump directory]"; exit 0;;
+esac
+root=${1:-${MONADO_GAME_ROOT:-}}
+if [ "$#" -gt 0 ]; then shift; fi
+if [ -z "$root" ] && [ -n "${APPIMAGE:-}" ] && [ -d "$(dirname -- "$APPIMAGE")/targets" ]; then root="$(dirname -- "$APPIMAGE")/targets"; fi
+case "$root" in ""|/*) ;; *) root="$PWD/$root";; esac
+data=${MONADO_DATA_ROOT:-}
+if [ -z "$data" ]; then
+  case "${XDG_DATA_HOME:-}" in /*) data="$XDG_DATA_HOME/lasrecomp";; *) data="${HOME:?HOME must be set}/.local/share/lasrecomp";; esac
+fi
+mkdir -p -- "$data/build/linux"
+data=$(CDPATH= cd -- "$data" && pwd)
+export LARECOMP_DATA_ROOT="$data"
+if [ -n "$root" ]; then
+  [ -f "$root/exefs/main" ] && [ -d "$root/romfs" ] || { echo "$root must contain exefs/main and romfs/ (your dump)" >&2; exit 2; }
+  ln -sfn -- "$(CDPATH= cd -- "$root" && pwd)" "$data/targets"
+fi
+ln -sfn -- "$appdir/usr/bin/monado" "$data/build/linux/monado"
+cd -- "$data"
+if [ -z "$direct" ]; then exec "$appdir/usr/bin/monado-launcher" "$@"; fi
+[ -f targets/exefs/main ] || { echo "No game dump: pass its directory once (it is remembered)" >&2; exit 2; }
+exec "$appdir/usr/bin/monado" targets "$@"
