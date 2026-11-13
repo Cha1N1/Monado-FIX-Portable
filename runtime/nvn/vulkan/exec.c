@@ -4810,6 +4810,22 @@ static struct { VkBuffer b; VmaAllocation m; uint64_t seq; } vc_dead[VC_DEAD];
 static int vc_ndead;
 static int vc_on = -1;
 int vk_vcache_state(void) { return vc_on; }  // -1 not decided yet, 0 off, 1 on (objects.c frame lag)
+// [XCDE] T-FRAME-LAG: objects.c latches "one frame in flight" here once nvnSyncWait decides it. It matters to the vertex
+// cache: the cache keeps vertex / index data safe for a frame the GPU has not finished only because the GPU reads the
+// cache's device-local copies. Those copies are refreshed in the submission, and a copy recorded from guest memory runs
+// when the GPU gets to it - with the GPU a frame behind, that is after the game rewrote those pages with the next
+// frame's data. The draws then read another frame's contents: effect / particle streams change entirely between frames,
+// so they draw as huge stretched quads (the beams and glows in a battle). vc_flush stages written pages through host
+// memory at submit time instead when this is on; with the frame wait intact the direct copy is already ordered.
+static _Atomic bool vc_lag;
+void vk_set_frame_lag(bool on) { atomic_store(&vc_lag, on); }
+// XCDE_VC_STAGE=0: record the refresh from guest memory as before (with the GPU a frame behind that copy can run after
+// the game rewrote the pages: the reference way to reproduce the stretched effect / glow corruption for an A/B).
+static bool vc_stage_on(void) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("XCDE_VC_STAGE"); on = !(e && *e == '0'); }
+    return on;
+}
 // (profiler: draws served / read in place, bytes refreshed, write tracking queries, written pages seen, query time)
 uint64_t prof_vc_hits, prof_vc_bypass, prof_vc_copied, prof_vc_queries, prof_vc_scan_pages, prof_vc_scan_ns;
 
@@ -5008,7 +5024,25 @@ void vc_flush(void) {
             cp[nc++] = (VkBufferCopy){o, o - e->lo, VC_PAGE};
         }
         if (nc) {
-            vkCmdCopyBuffer(cb, gmem_buf, e->buf, (uint32_t)nc, cp);
+            bool gpu_pages = false;  // (a GPU writer may fill part of it: those bytes are only current on the GPU timeline)
+            if (atomic_load(&vc_lag) && vc_stage_on() && vc_page_gpu)
+                for (uint64_t p = e->lo / VC_PAGE; p < e->hi / VC_PAGE && !gpu_pages; p++) gpu_pages = vc_page_gpu[p];
+            if (atomic_load(&vc_lag) && vc_stage_on() && !gpu_pages) {
+                // [XCDE] T-FRAME-LAG: copy the pages out now, while they still hold this submission's data, and let the
+                // GPU read the staged bytes. The ring chunk is not reused before this submission completes.
+                uint64_t total = 0;
+                for (int k = 0; k < nc; k++) total += cp[k].size;
+                VkSpan st = vk_transient(total, 16);
+                uint64_t at = 0;
+                for (int k = 0; k < nc; k++) {
+                    memcpy((uint8_t *)st.ptr + at, (const void *)(uintptr_t)(HEAP_BASE + cp[k].srcOffset), cp[k].size);
+                    cp[k].srcOffset = st.off + at;
+                    at += cp[k].size;
+                }
+                vkCmdCopyBuffer(cb, st.buf, e->buf, (uint32_t)nc, cp);
+            } else {
+                vkCmdCopyBuffer(cb, gmem_buf, e->buf, (uint32_t)nc, cp);
+            }
             for (int k = 0; k < nc; k++) prof_vc_copied += cp[k].size;
         }
         e->gen = g;
