@@ -45,7 +45,7 @@ objects=()
 # The units of scripts/build_rt_gfx.sh, with the Linux platform layer.
 rt=(loader dispatch kernel ipc fnprof platform/linux services/fs services/romfs_virtual services/am services/acc services/time
     services/hid_set services/kbicons services/misc services/audio services/hwopus hle/heaps hle/pl hle/vi hle/nvn_boot
-    hle/fibers hle/input hle/party hle/bindings hle/movie hle/framepace hle/foliage_distance hle/foliage_pool
+    hle/fibers hle/input hle/party hle/bindings hle/movie hle/framepace hle/foliage_distance hle/foliage_pool hle/graphics
     host/stubs host/settings_ini host/stubs_gfx
     host/gamelib_static host/main_boot diag/diag diag/sampler diag/watchdog diag/crashdump paths)
 nvn=(astc cmdbuf formats maxwell/translate objects output_scale smaa_data tegra texpatch vulkan/device vulkan/exec

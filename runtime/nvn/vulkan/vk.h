@@ -43,6 +43,7 @@ typedef struct {
     VkSemaphore timeline;      // value = last completed submission number
     VkCommandPool pool;        // render thread only
     bool custom_border, divisor, host_import, robust2, logic_op, minmax;
+    bool sampler_anisotropy;  // [XCDE] the enabled samplerAnisotropy feature (texture filtering option)
     bool dmabuf_import;  // [XCDE] T-LINUX-GTT: VK_KHR_external_memory_fd + VK_EXT_external_memory_dma_buf
     bool feedback_loop;  // [XCDE] VK_EXT_attachment_feedback_loop_layout (#7): colour attachments sampled by the draw that writes them
     bool feedback_local_read;  // [XCDE] #7: VK_KHR_dynamic_rendering_local_read - by-region dependency inside rendering

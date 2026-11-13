@@ -471,6 +471,7 @@ static void create_device(void) {
     b->dualSrcBlend = h->dualSrcBlend;
     b->fillModeNonSolid = h->fillModeNonSolid;
     b->samplerAnisotropy = h->samplerAnisotropy;
+    g_vk.sampler_anisotropy = b->samplerAnisotropy;  // [XCDE] texture filtering option
     b->textureCompressionBC = h->textureCompressionBC;
     b->shaderInt64 = h->shaderInt64;
     b->depthBiasClamp = h->depthBiasClamp;
