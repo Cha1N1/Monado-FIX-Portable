@@ -41,5 +41,11 @@ int main(int argc, char **argv) {
     g_settings.res_mode = RES_1_5; settings_save();
     g_settings.res_mode = RES_MATCH; settings_load();
     assert(g_settings.res_mode == RES_1_5);
+    // [XCDE] RCAS strength: unset stays "default" (FSR 1 0.9 / FSR 3 0.3); an explicit value round-trips, 0 = off
+    assert(strstr(data, "upscale_sharpness = default") && g_settings.upscale_sharpness < 0.0f);
+    g_settings.upscaler = UPSCALE_FSR1; assert(xcde_sharpness(&g_settings) == 0.9f);
+    g_settings.upscaler = UPSCALE_FSR3; assert(xcde_sharpness(&g_settings) == 0.3f);
+    g_settings.upscale_sharpness = 0.0f; settings_save(); g_settings.upscale_sharpness = -1.0f; settings_load();
+    assert(g_settings.upscale_sharpness == 0.0f && xcde_sharpness(&g_settings) == 0.0f);
     assert(!remove(argv[1])); puts("settings round-trip: stable GPU ID, policies, 1.5x, unknown keys and default reset OK"); return 0;
 }

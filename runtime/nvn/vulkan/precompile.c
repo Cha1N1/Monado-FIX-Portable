@@ -239,7 +239,12 @@ static void scan_file(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) return;
     fseek(f, 0, SEEK_END);
+    // [XCDE] T-LINUX: off_t is 64-bit on the supported Linux x86-64 host.
+#ifdef _WIN32
     long long n = _ftelli64(f);
+#else
+    long long n = ftello(f);
+#endif
     fseek(f, 0, SEEK_SET);
     bool big = n > (64 << 20);
     if (big) pthread_mutex_lock(&big_lock);
@@ -427,7 +432,9 @@ static Map var_done;
 static void load_seed_file(const char *path, Map *done);
 static void load_seed(void) {
     Map done = {0};
-    load_seed_file("data/variants_seed.bin", &done);
+    // [XCDE] T-LINUX: the AppImage exports the bundled seed path.
+    const char *seed = getenv("XCDE_VARIANTS_SEED");
+    load_seed_file(seed && *seed ? seed : "data/variants_seed.bin", &done);
     load_seed_file("cache/variants.bin", &done);
 }
 static void load_seed_file(const char *path, Map *done_) {
@@ -708,7 +715,14 @@ int vk_precompile_main(const char *root) {
         // changes SPIR-V): its pieces would no longer match and the game compiled them while playing (10-58 ms hitches
         // on the first draws of each area). The launcher compares this line with build/xcde.exe and precompiles again.
         struct stat es;
-        if (stat("build/xcde.exe", &es) == 0) fprintf(f, "exe %lld %lld%c", (long long)es.st_size, (long long)es.st_mtime, 10);
+#ifdef _WIN32
+        const char *stamp_exe = "build/xcde.exe";
+#else
+        // Match the launcher's game_exe(), including inside an AppImage.
+        // The legacy Windows path is absent from the Linux data directory.
+        const char *stamp_exe = "/proc/self/exe";
+#endif
+        if (stat(stamp_exe, &es) == 0) fprintf(f, "exe %lld %lld%c", (long long)es.st_size, (long long)es.st_mtime, 10);
         fclose(f);
     }
     fflush(stdout);

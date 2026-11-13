@@ -9,12 +9,13 @@
 #include "../settings.h"
 #include "../quality_policy.h"
 #include "ini_writer.h"
+#include "../hle/foliage_distance.h"
 
 const char *const g_language_codes[N_LANGUAGES] = {"", "ja", "en-US", "fr", "de", "it", "es", "zh-CN", "ko", "nl", "pt", "ru", "zh-Hans", "zh-Hant"};
 const char *const g_language_names[N_LANGUAGES] = {"Auto", "Japanese", "English", "French", "German", "Italian", "Spanish",
                                                    "Chinese", "Korean", "Dutch", "Portuguese", "Russian",
                                                    "Chinese (Simplified)", "Chinese (Traditional)"};
-Settings g_settings = {.fps = 30, .fps_overlay = true, .upscaler_auto = true, .volume = 1.0f, .movie_audio = true, .res_mode = RES_MATCH, .upscaler = UPSCALE_FSR1, .upscale_quality = UQ_QUALITY, .game_blur = true, .vsync = true, .ui_lang = 1, .gpu_index = -1, .gpu_profile = GPU_PROFILE_AUTO, .gpu_gpl = GPU_GPL_AUTO, .occlusion = OCCL_AUTO, .amd_fix = AMD_FIX_AUTO, .session_fix = SESSION_FIX_AUTO, .gpu_memory_budget = true, .input_rumble = true};
+Settings g_settings = {.fps = 30, .fps_overlay = true, .upscaler_auto = true, .volume = 1.0f, .movie_audio = true, .res_mode = RES_MATCH, .upscaler = UPSCALE_FSR1, .upscale_quality = UQ_QUALITY, .upscale_sharpness = -1.0f, .game_blur = true, .vsync = true, .ui_lang = 1, .gpu_index = -1, .gpu_profile = GPU_PROFILE_AUTO, .gpu_gpl = GPU_GPL_AUTO, .occlusion = OCCL_AUTO, .amd_fix = AMD_FIX_AUTO, .session_fix = SESSION_FIX_AUTO, .gpu_memory_budget = true, .input_rumble = true, .grass_lod = GRASS_DEFAULT};
 int g_window_w = 1280, g_window_h = 720;  // windowed size (settings.h)
 
 // [XCDE] Mods (runtime/services/romfs_virtual.c): xcde.ini `mod_<folder> = 0/1`; a folder not listed is on.
@@ -52,6 +53,7 @@ static int lang_index(const char *v) {
 }
 
 void settings_load(void) {
+    xcde_foliage_configure(g_settings.grass_lod);  // [XCDE] default / XCDE_GRASS_DISTANCE even without an INI
     // test runs (hidden window, deterministic, scripted input) ignore the player's settings unless XCDE_INI names a file
     if (!getenv("XCDE_INI") && (getenv("LARECOMP_HIDDEN") || getenv("XCDE_DETERMINISTIC") || getenv("XCDE_INPUT_REPLAY"))) return;
     FILE *f = fopen(ini_path(), "r");
@@ -80,10 +82,13 @@ void settings_load(void) {
         } else if (!strcmp(k, "upscaler")) {
             g_settings.upscaler_auto = !strcmp(v, "auto");
             g_settings.upscaler = !strcmp(v, "fsr") ? UPSCALE_FSR1 : !strcmp(v, "fsr3") ? UPSCALE_FSR3
-                                : !strcmp(v, "dlss") ? UPSCALE_DLSS : g_settings.upscaler_auto ? UPSCALE_FSR1 : UPSCALE_BILINEAR;
+                                : !strcmp(v, "fsr4lite") ? UPSCALE_FSR4_LITE : !strcmp(v, "dlss") ? UPSCALE_DLSS : g_settings.upscaler_auto ? UPSCALE_FSR1 : UPSCALE_BILINEAR;
         } else if (!strcmp(k, "upscale_quality")) {
             static const char *q[] = {"native", "quality", "balanced", "performance", "ultra"};
             for (int i = 0; i < 5; i++) if (!strcmp(v, q[i])) g_settings.upscale_quality = i;
+        } else if (!strcmp(k, "upscale_sharpness")) {  // [XCDE] "default" or 0..1
+            float x = strcmp(v, "default") ? (float)atof(v) : -1.0f;
+            g_settings.upscale_sharpness = x < 0.0f ? -1.0f : x > 1.0f ? 1.0f : x;
         } else if (!strcmp(k, "frame_gen")) g_settings.frame_gen = atoi(v) != 0;
         else if (!strcmp(k, "cutscenes")) g_settings.cutscene_mode = !strcmp(v, "30") ? 1 : !strcmp(v, "30fg") ? 2 : 0;
         else if (!strcmp(k, "gpu_index")) { int n = atoi(v); g_settings.gpu_index = n < -1 ? -1 : n > 255 ? 255 : n; }
@@ -103,6 +108,7 @@ void settings_load(void) {
         else if (!strcmp(k, "session_fix")) g_settings.session_fix = !strcmp(v, "on") ? SESSION_FIX_ON : !strcmp(v, "off") ? SESSION_FIX_OFF : SESSION_FIX_AUTO;
         else if (!strcmp(k, "gpu_memory_budget")) g_settings.gpu_memory_budget = atoi(v) != 0;
         else if (!strcmp(k, "rumble")) g_settings.input_rumble = atoi(v) != 0;
+        else if (!strcmp(k, "grass_lod")) g_settings.grass_lod = grass_lod_parse(v);  // [XCDE]
         else if (!strcmp(k, "antialias")) g_settings.antialias = !strcmp(v, "smaa") ? AA_SMAA : AA_OFF;
         else if (!strcmp(k, "depth_of_field")) g_settings.dof_off = atoi(v) == 0;
         else if (!strcmp(k, "game_blur")) g_settings.game_blur = atoi(v) != 0;
@@ -127,6 +133,7 @@ void settings_load(void) {
         else bind_settings_load(k, v);
     }
     fclose(f);
+    xcde_foliage_configure(g_settings.grass_lod);  // [XCDE] the saved grass preset
     if (g_window_w < 320) g_window_w = 320;
     if (g_window_h < 180) g_window_h = 180;
     if (g_settings.volume < 0) g_settings.volume = 0;
@@ -148,10 +155,12 @@ void settings_save(void) {
     fprintf(f, "fullscreen = %d\nwindow = %dx%d\n", g_settings.fullscreen, g_window_w, g_window_h);
     fprintf(f, "aspect = %s\n", g_settings.aspect == ASPECT_ORIGINAL ? "original" : "auto");
     fprintf(f, "resolution = %s\n", g_settings.res_mode >= 0 && g_settings.res_mode <= RES_1_5 ? res[g_settings.res_mode] : "match");
-    static const char *up[] = {"bilinear", "bilinear", "fsr", "fsr3", "dlss"};
+    static const char *up[] = {"bilinear", "bilinear", "fsr", "fsr3", "dlss", "fsr4lite"};
     static const char *uq[] = {"native", "quality", "balanced", "performance", "ultra"};
-    fprintf(f, "upscaler = %s\nantialias = %s\n", g_settings.upscaler_auto ? "auto" : up[g_settings.upscaler >= 0 && g_settings.upscaler <= 4 ? g_settings.upscaler : 0],
+    fprintf(f, "upscaler = %s\nantialias = %s\n", g_settings.upscaler_auto ? "auto" : up[g_settings.upscaler >= 0 && g_settings.upscaler <= 5 ? g_settings.upscaler : 0],
             g_settings.antialias == AA_SMAA ? "smaa" : "off");
+    if (g_settings.upscale_sharpness < 0.0f) fprintf(f, "upscale_sharpness = default\n");  // [XCDE]
+    else fprintf(f, "upscale_sharpness = %.3f\n", g_settings.upscale_sharpness);
     fprintf(f, "upscale_quality = %s\nframe_gen = %d\n",
             uq[g_settings.upscale_quality >= 0 && g_settings.upscale_quality <= 4 ? g_settings.upscale_quality : 1], g_settings.frame_gen);
     fprintf(f, "depth_of_field = %d\n", !g_settings.dof_off);
@@ -169,6 +178,7 @@ void settings_save(void) {
             g_settings.session_fix == SESSION_FIX_ON ? "on" : g_settings.session_fix == SESSION_FIX_OFF ? "off" : "auto",
             g_settings.gpu_memory_budget);
     fprintf(f, "rumble = %d\n", g_settings.input_rumble);
+    fprintf(f, "grass_lod = %s\n", grass_lod_ini[grass_lod_valid(g_settings.grass_lod)]);  // [XCDE]
     fprintf(f, "party_switch = %d\n", g_party_switch);
     fprintf(f, "vulkan_api = %s\nfps_overlay = %d\n", g_settings.vulkan_api == 12 ? "1.2" : g_settings.vulkan_api == 13 ? "1.3" : g_settings.vulkan_api == 14 ? "1.4" : "auto", g_settings.fps_overlay);
     fprintf(f, "gpu_uuid = %s\ngpu_preset = %s\ngpu_keep_heavy = %d\n", g_settings.gpu_uuid,

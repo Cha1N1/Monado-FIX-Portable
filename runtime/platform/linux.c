@@ -1,5 +1,7 @@
 // Linux host layer (runtime/platform.h). x86-64 and aarch64.
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include <SDL3/SDL.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -8,6 +10,7 @@
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,10 +22,14 @@
 #include <unistd.h>
 
 #include "../platform.h"
+#include "../rt.h"  // [XCDE] T-LINUX: guest bounds for memory accounting.
+#include "linux_gpu.h"  // [XCDE] T-LINUX-GTT
 
 #ifndef MAP_FIXED_NOREPLACE
 #define MAP_FIXED_NOREPLACE 0x100000
 #endif
+
+static bool guest_heap_reserved;  // [XCDE] T-LINUX-GTT
 
 // ---- guest address space
 // Everything readable/writable from the start, like macOS: the guest maps at 4K granularity, and untouched pages
@@ -32,11 +39,29 @@ bool plat_reserve_guest(uint64_t lo, uint64_t hi) {
                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
     if (p == MAP_FAILED) return false;
     if (p != (void *)(uintptr_t)lo) { munmap(p, hi - lo); return false; }  // (kernels before 4.17: just a hint)
+    guest_heap_reserved = lo <= HEAP_BASE && hi >= HEAP_BASE + HEAP_MAX;
     return true;
+}
+
+int plat_gpu_heap_fd(uint64_t address, uint64_t size, uint64_t *allocation_size) {
+    if (gpu_heap_fd < 0 || address != gpu_heap_base || size > gpu_heap_size) return -1;
+    *allocation_size = gpu_heap_size;
+    return gpu_heap_fd;
 }
 
 // Fresh zero pages over the whole window (the old ones are released at once).
 bool plat_reset_guest(uint64_t lo, uint64_t hi) {
+    // [XCDE] T-LINUX-GTT: keep the driver-owned heap (and its Vulkan import) across a guest reset; zero it instead.
+    // The caller has stopped guest and GPU work.
+    if (gpu_heap_fd >= 0 && lo <= gpu_heap_base && hi >= gpu_heap_base + gpu_heap_size) {
+        if (lo < gpu_heap_base && mmap((void *)(uintptr_t)lo, gpu_heap_base - lo, PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0) != (void *)(uintptr_t)lo) return false;
+        uint64_t end = gpu_heap_base + gpu_heap_size;
+        if (hi > end && mmap((void *)(uintptr_t)end, hi - end, PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0) != (void *)(uintptr_t)end) return false;
+        memset((void *)gpu_heap_base, 0, gpu_heap_size);
+        return true;
+    }
     return mmap((void *)(uintptr_t)lo, hi - lo, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED,
                 -1, 0) == (void *)(uintptr_t)lo;
 }
@@ -85,6 +110,8 @@ static void log_to_file_without_terminal(void) {
     char dir[900];
     const char *env = getenv("LARECOMP_DATA_ROOT"), *xdg = getenv("XDG_DATA_HOME"), *home = getenv("HOME");
     struct stat st;
+    // [XCDE] T-LINUX: already redirected to a file or a pipe (the launcher's build/last_game.log, `| tee`): keep it
+    if (fstat(STDERR_FILENO, &st) == 0 && (S_ISREG(st.st_mode) || S_ISFIFO(st.st_mode))) return;
     if (env && *env) snprintf(dir, sizeof dir, "%s", env);
     else if (stat("extracted", &st) == 0 && S_ISDIR(st.st_mode)) return;  // dev mode: wherever stderr goes already
     else if (xdg && *xdg == '/') snprintf(dir, sizeof dir, "%s/lasrecomp", xdg);
@@ -100,13 +127,13 @@ static void log_to_file_without_terminal(void) {
 }
 
 #if defined(__x86_64__)
-// The recompiled game code is built for x86-64-v3 (Makefile GENARCH: AVX2, FMA, BMI2): say so instead of crashing
-// with an illegal instruction on an older CPU.
+// [XCDE] T-LINUX: match the x86-64-v2 baseline used by both native build paths.
 static void require_cpu(void) {
     __builtin_cpu_init();
-    if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma") && __builtin_cpu_supports("bmi2")) return;
-    fprintf(stderr, "FATAL: LAS Recomp needs a CPU with AVX2 (Intel Haswell / 2013 or newer, AMD Excavator / Zen or "
-                    "newer).\n");
+    if (__builtin_cpu_supports("sse3") && __builtin_cpu_supports("ssse3") &&
+        __builtin_cpu_supports("sse4.1") && __builtin_cpu_supports("sse4.2") &&
+        __builtin_cpu_supports("popcnt") && __builtin_cpu_supports("cx16")) return;
+    fprintf(stderr, "FATAL: this build needs an x86-64-v2 CPU (SSE4.2, POPCNT and CMPXCHG16B).\n");
     exit(1);
 }
 #else
@@ -116,6 +143,8 @@ static void require_cpu(void) {}
 void plat_init(void) {
     log_to_file_without_terminal();
     require_cpu();
+    // [XCDE] T-LINUX-GTT: before any guest code runs or writes the heap (XCDE_GPU_BO=0: off)
+    if (guest_heap_reserved && gpu_heap_fd < 0) linux_gpu_heap_map((void *)(uintptr_t)HEAP_BASE, HEAP_MAX);
 }
 
 // (inside an AppImage: the binary in its mount, which stays mounted while this process lives - re-exec included)
@@ -267,19 +296,128 @@ bool plat_remove_tree(const char *dir) { return nftw(dir, rm_entry, 16, FTW_DEPT
 
 // End the process at once, skipping the library teardown: as on Windows, the GPU driver's threads crashed in exit()
 // while the game's threads still submitted work.
-void plat_terminate(void) { _exit(0); }
+// [XCDE] T-LINUX-THREE: diagnostics exit with _exit, bypassing LLVM's atexit writer.
+extern int __llvm_profile_write_file(void) __attribute__((weak));
+void plat_terminate(void) {
+    if (__llvm_profile_write_file) __llvm_profile_write_file();
+    _exit(0);
+}
 
-// [XCDE] T122: not sampled on this platform
-uint64_t plat_thread_pc(void *pthread_handle) { (void)pthread_handle; return 0; }
-void plat_thread_name(const char *name) { (void)name; }
-void plat_thread_background(void) {}
+// [XCDE] T-SCENE-SYNC: sample peer PCs in-process; no ptrace permissions needed.
+// The handler only copies a register into a lock-free preallocated slot. Timed-out
+// requests stay reserved until delivered, so a late signal cannot corrupt a new sample.
+typedef struct { _Atomic unsigned state; _Atomic uint64_t pc; } PeerSample;
+static PeerSample peer_samples[128];
+static pthread_mutex_t peer_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_once_t peer_once = PTHREAD_ONCE_INIT;
+static int peer_signal;
+static void peer_sample_handler(int sig, siginfo_t *info, void *context) {
+    (void)sig;
+    if (!info || info->si_code != SI_QUEUE) return;
+    uintptr_t ptr = (uintptr_t)info->si_value.sival_ptr, start = (uintptr_t)peer_samples;
+    if (ptr < start || ptr >= start + sizeof(peer_samples) || (ptr-start) % sizeof(PeerSample)) return;
+    PeerSample *sample = (PeerSample *)ptr;
+    if (atomic_load_explicit(&sample->state, memory_order_relaxed) != 1) return;
+    ucontext_t *uc = context;
+    uint64_t pc = 0;
+#if defined(__x86_64__)
+    pc = (uint64_t)uc->uc_mcontext.gregs[REG_RIP];
+#elif defined(__aarch64__)
+    pc = (uint64_t)uc->uc_mcontext.pc;
+#endif
+    atomic_store_explicit(&sample->pc, pc, memory_order_relaxed);
+    atomic_store_explicit(&sample->state, 2, memory_order_release);
+}
+static void peer_sample_install(void) {
+    if (!atomic_is_lock_free(&peer_samples[0].state) || !atomic_is_lock_free(&peer_samples[0].pc)) return;
+    for (int sig = SIGRTMIN + 6; sig <= SIGRTMAX; ++sig) {
+        struct sigaction old, sa = {0};
+        if (sigaction(sig, NULL, &old) || old.sa_handler != SIG_DFL) continue;
+        sa.sa_sigaction = peer_sample_handler; sa.sa_flags = SA_SIGINFO | SA_RESTART;
+        sigemptyset(&sa.sa_mask);
+        if (!sigaction(sig, &sa, NULL)) { peer_signal = sig; break; }
+    }
+}
+uint64_t plat_thread_pc(void *pthread_handle) {
+    if (!pthread_handle) return 0;
+    pthread_once(&peer_once, peer_sample_install);
+    if (!peer_signal) return 0;
+    pthread_mutex_lock(&peer_lock);
+    PeerSample *sample = NULL;
+    for (unsigned i = 0; i < sizeof(peer_samples)/sizeof(peer_samples[0]); ++i) {
+        unsigned state = atomic_load_explicit(&peer_samples[i].state, memory_order_acquire);
+        if (state != 1) { sample = &peer_samples[i]; break; }
+    }
+    uint64_t pc = 0;
+    if (sample) {
+        atomic_store_explicit(&sample->state, 1, memory_order_relaxed);
+        union sigval value = {.sival_ptr = sample};
+        if (!pthread_sigqueue(*(pthread_t *)pthread_handle, peer_signal, value)) {
+            for (int i = 0; i < 40; ++i) {
+                if (atomic_load_explicit(&sample->state, memory_order_acquire) == 2) {
+                    pc = atomic_load_explicit(&sample->pc, memory_order_relaxed); break;
+                }
+                struct timespec pause = {.tv_nsec = 500000}; nanosleep(&pause, NULL);
+            }
+        } else atomic_store_explicit(&sample->state, 0, memory_order_release);
+    }
+    pthread_mutex_unlock(&peer_lock);
+    return pc;
+}
+// [XCDE] T-LINUX-UI: prewarm workers should yield CPU priority to the game.
+void plat_thread_name(const char *name) {
+    char short_name[16];
+    snprintf(short_name, sizeof short_name, "%s", name);
+    pthread_setname_np(pthread_self(), short_name);
+}
+void plat_thread_background(void) { setpriority(PRIO_PROCESS, (id_t)gettid(), 10); }
 void plat_thread_audio(void) {}
-int plat_cpu_count(void) { long n = sysconf(_SC_NPROCESSORS_ONLN); return n > 0 ? (int)n : 4; }
+int plat_cpu_count(void) {
+    cpu_set_t allowed;
+    if (!sched_getaffinity(0, sizeof allowed, &allowed)) {
+        int n = CPU_COUNT(&allowed);
+        if (n > 0) return n;
+    }
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? (int)n : 4;
+}
 
-// [XCDE] T122: not available on this platform
-int plat_thread_backtrace(void *pthread_handle, uint64_t *pcs, int max) { (void)pthread_handle; (void)pcs; (void)max; return 0; }
+// Linux captures the current PC only; do not walk an unsuspended peer stack.
+int plat_thread_backtrace(void *pthread_handle, uint64_t *pcs, int max) {
+    if (!pcs || max <= 0) return 0;
+    uint64_t pc = plat_thread_pc(pthread_handle);
+    if (!pc) return 0;
+    pcs[0] = pc; return 1;
+}
 int plat_guest_find(const unsigned char *pat, unsigned long n, unsigned long long *out, int max) { (void)pat; (void)n; (void)out; (void)max; return 0; }  // [XCDE] (not wired)
 unsigned long long plat_guest_dump(const char *path) { (void)path; return 0; }  // [XCDE] (not wired)
 
 // [VEGA-FIX] no crash guard on this platform: just run it
 bool plat_try_call(void (*fn)(void *), void *arg) { fn(arg); return true; }
+
+// [XCDE] T-LINUX: renderer memory diagnostics from the kernel's process accounting.
+void plat_mem_info(uint64_t *priv, uint64_t *ws, uint64_t *guest_commit) {
+    *priv = *ws = *guest_commit = 0;
+    FILE *f = fopen("/proc/self/smaps", "r");
+    if (!f) return;
+    char line[1024];
+    unsigned long long lo, hi, kb;
+    bool guest = false;
+    while (fgets(line, sizeof line, f)) {
+        if (sscanf(line, "%llx-%llx", &lo, &hi) == 2)
+            guest = lo >= GUEST_LO && hi <= GUEST_HI;
+        else if (sscanf(line, "Rss: %llu kB", &kb) == 1) {
+            *ws += kb * 1024;
+            if (guest) *guest_commit += kb * 1024;
+        } else if (sscanf(line, "Private_Clean: %llu kB", &kb) == 1 ||
+                   sscanf(line, "Private_Dirty: %llu kB", &kb) == 1) *priv += kb * 1024;
+    }
+    fclose(f);
+}
+void plat_mem_map(void) {
+    FILE *f = fopen("/proc/self/maps", "r");
+    if (!f) return;
+    char line[1024];
+    while (fgets(line, sizeof line, f)) fputs(line, stderr);
+    fclose(f);
+}

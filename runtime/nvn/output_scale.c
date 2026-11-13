@@ -112,7 +112,8 @@ void output_scale(double dw, double dh, bool reshape_allowed, double now, double
         else if (mode == RES_Q25) h *= 0.25;
         else if (mode == RES_Q50) h *= 0.5;
         // [XCDE] temporal upscalers (FSR 3 / DLSS): Match display at the quality mode's render size
-        else if (mode == RES_MATCH && (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS)) {
+        else if (mode == RES_MATCH && (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS ||
+                                       g_settings.upscaler == UPSCALE_FSR4_LITE)) {
             static const double ratio[] = {1.0, 1.5, 1.7, 2.0, 3.0};
             int q = g_settings.upscale_quality;
             h /= ratio[q >= 0 && q <= 4 ? q : 1];

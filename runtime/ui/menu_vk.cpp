@@ -20,6 +20,7 @@
 extern "C" {
 #include "../nvn/vulkan/vk.h"
 #include "../settings.h"
+#include "../hle/foliage_distance.h"
 #include "menu.h"
 bool vk_imgui_backend_init(void);
 void input_reset(void);
@@ -164,6 +165,7 @@ static void feed(ImGuiIO &io, uint32_t w, uint32_t h) {
 // [XCDE] the menu's language follows the launcher's (xcde.ini launcher_lang; g_settings.ui_lang 1 = English): the
 // Spanish text is the key, T() gives the English one.
 static const char *const k_en[][2] = {
+    {"AMD FSR 4 Lite (temporal, nativo)", "AMD FSR 4 Lite (temporal, native)"},  // [XCDE] T-FSR4-LITE
     {"Igual que la ventana (recomendado)", "Match the window (recommended)"}, {"1x - 720p (como Switch)", "1x - 720p (like Switch)"},
     {"75 % de la ventana", "75 % of the window"}, {"50 % de la ventana", "50 % of the window"},
     {"Dinámica (según objetivo FPS)", "Dynamic (follows FPS target)"}, {"Opciones  (F1 / Esc para volver al juego)", "Options  (F1 / Esc to go back to the game)"},
@@ -237,14 +239,20 @@ static void ui(void) {
                 ImGui::TextWrapped(g_settings.ui_lang
                     ? "An Nx resolution keeps the Switch's line count: in windows wider or taller than 16:9 it is stretched. \"Same as the window\" stays sharp."
                     : "Una resolución Nx mantiene las líneas de la Switch: en ventanas m\xC3\xA1s anchas o altas que 16:9 se estira. \xC2\xABIgual que la ventana\xC2\xBB lo mantiene n\xC3\xADtido.");
-            static const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal)", "NVIDIA DLSS (temporal, RTX)"};
-            static const int upv[] = {UPSCALE_BILINEAR, UPSCALE_FSR1, UPSCALE_FSR3, UPSCALE_DLSS};
+            static const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal)", "NVIDIA DLSS (temporal, RTX)",
+                                        "AMD FSR 4 Lite (temporal, nativo)"};
+            static const int upv[] = {UPSCALE_BILINEAR, UPSCALE_FSR1, UPSCALE_FSR3, UPSCALE_DLSS, UPSCALE_FSR4_LITE};
+#ifdef __linux__
+            const int nups = 5;  // [XCDE] T-FSR4-LITE: the native Linux component
+#else
+            const int nups = 4;
+#endif
             int ui_ = 0;
-            for (int i = 0; i < 4; i++) if (upv[i] == g_settings.upscaler) ui_ = i;
+            for (int i = 0; i < nups; i++) if (upv[i] == g_settings.upscaler) ui_ = i;
             const char *preview = g_settings.upscaler_auto ? (g_settings.ui_lang ? "Automatic (DLSS on supported RTX)" : "Automático (DLSS en RTX compatible)") : T(ups[ui_]);
             if (monado_begin_combo(T("Escalado / antialiasing"), preview)) {
                 if (ImGui::Selectable(g_settings.ui_lang ? "Automatic (restart)" : "Automático (reiniciar)", g_settings.upscaler_auto)) g_settings.upscaler_auto = true;
-                for (int i = 0; i < 4; ++i) {
+                for (int i = 0; i < nups; ++i) {
                     bool unavailable = i == 3 && !dlss_available();
                     ImGui::BeginDisabled(unavailable);
                     if (ImGui::Selectable(T(ups[i]), !g_settings.upscaler_auto && ui_ == i)) { g_settings.upscaler_auto = false; g_settings.upscaler = upv[i]; }
@@ -253,7 +261,17 @@ static void ui(void) {
                 }
                 ImGui::EndCombo();
             }
-            if (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS) {
+            if (g_settings.upscaler == UPSCALE_FSR1 || g_settings.upscaler == UPSCALE_FSR3) {  // [XCDE] RCAS strength, live
+                float sharp = xcde_sharpness(&g_settings);
+                if (ImGui::SliderFloat(g_settings.ui_lang ? "Sharpening (RCAS)" : "Nitidez (RCAS)", &sharp, 0.0f, 1.0f, "%.2f"))
+                    g_settings.upscale_sharpness = sharp;
+                ImGui::SetItemTooltip("%s", g_settings.ui_lang ? "0 = off, 1 = maximum. Applies at once." : "0 = desactivada, 1 = máxima. Se aplica al instante.");
+                if (g_settings.upscale_sharpness >= 0.0f) {
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton(g_settings.ui_lang ? "Default" : "Predeterminada")) g_settings.upscale_sharpness = -1.0f;
+                }
+            }
+            if (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS || g_settings.upscaler == UPSCALE_FSR4_LITE) {
                 static const char *uq[] = {"Nativo (solo antialiasing)", "Calidad (67 %)", "Equilibrado (59 %)", "Rendimiento (50 %)",
                                            "Ultra rendimiento (33 %)"};
                 monado_combo(T("Calidad del escalado"), &g_settings.upscale_quality, TL(uq, 5).p, 5);
@@ -269,6 +287,26 @@ static void ui(void) {
             ImGui::Checkbox(T("Antialiasing y desenfoque de movimiento del juego (al reiniciar)"), &g_settings.game_blur);
             bool taa = !g_settings.taa_off;
             if (ImGui::Checkbox(T("Antialiasing temporal (TAA) del juego (al reiniciar)"), &taa)) g_settings.taa_off = !taa;
+            {   // [XCDE] grass draw distance: applied on the next foliage pass, no restart
+                const char *const *labels = g_settings.ui_lang ? grass_lod_labels : grass_lod_labels_es;
+                float grass_scale = xcde_foliage_requested_scale();
+                int grass_choice = grass_lod_from_scale(grass_scale);
+                char custom_grass[48];
+                snprintf(custom_grass, sizeof custom_grass, g_settings.ui_lang ? "Custom (%.2fx)" : "Personalizada (%.2fx)", grass_scale);
+                if (ImGui::BeginCombo(g_settings.ui_lang ? "Grass distance" : "Distancia de la hierba",
+                                      grass_choice < 0 ? custom_grass : labels[grass_choice])) {
+                    for (int i = 0; i < GRASS_PRESET_COUNT; ++i) {
+                        if (ImGui::Selectable(labels[i], i == grass_choice)) { g_settings.grass_lod = i; xcde_foliage_set_preset(i); }
+                        if (i == grass_choice) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip("%s", g_settings.ui_lang
+                    ? "Applies while playing, without restarting. Higher settings keep grass visible farther away and cost FPS.\n"
+                      "Original keeps High's nearby detail at the game's original distance. Low halves grass reach."
+                    : "Se aplica mientras juegas, sin reiniciar. Los valores altos mantienen la hierba visible más lejos y cuestan FPS.\n"
+                      "Original conserva el detalle cercano de Alta a la distancia original del juego. Baja reduce el alcance a la mitad.");
+            }
             ImGui::Checkbox(g_settings.ui_lang ? "On-screen FPS counter" : "Contador FPS en pantalla", &g_settings.fps_overlay);
             ImGui::Checkbox(T("Mostrar FPS en la barra de título"), &g_settings.show_fps);
             ImGui::SeparatorText(T("Velocidad"));
