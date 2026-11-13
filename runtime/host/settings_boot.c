@@ -15,3 +15,11 @@ void settings_save(void) {}
 const char *settings_language(void) { return "en-US"; }
 const char *settings_language_name(void) { return "English"; }
 
+
+// [XCDE] The headless boot build links the generated game code without hle/party.c: accept every footstep marker
+// (the follower repeat guard lives in party.c, linked into the window build only).
+struct Cpu;
+_Bool xcde_footstep_marker(struct Cpu *c, unsigned long long action, unsigned long long marker) {
+    (void)c; (void)action; (void)marker;
+    return 1;
+}
