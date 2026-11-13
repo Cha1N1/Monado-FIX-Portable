@@ -7,7 +7,14 @@ standard `getenv`; `monado_adapter.cpp` is the Monado C interface (same licence)
 The upstream namespace/file names are historical: this revision implements
 4.1.2's real 12-dispatch Lite INT8 graph and 27,392-byte model weights.
 
-Build in the repository: `scripts/build_fsr4_linux.sh`.
+Build in the repository: `scripts/build_fsr4_linux.sh` (Linux, `build/linux/libmonado_fsr4.so`) or
+`scripts/build_fsr4_windows.sh` (Windows, zig c++ from `.venv`, `build/monado_fsr4.dll`; `scripts/build_all.sh` and
+the CMake `windows` preset build it too).
+
+The model files are prepared once with `tools/prepare_fsr4_lite.py`, which needs Linux and Proton. The Windows build
+reads them from `build/fsr4/lite/` beside `xcde.exe`: copy the prepared `build/fsr4/assets/lite` folder there (the
+Windows build scripts do this when `build/fsr4/assets/lite` exists). They come from AMD's SDK under the terms in
+`LICENSE-AMD-SDK.md`, so `tools/make_portable.py` only packages them with `--with-fsr4-assets`.
 Build from the flat source folder included in the AppImage (Vulkan headers,
 loader and C++20 compiler required):
 
