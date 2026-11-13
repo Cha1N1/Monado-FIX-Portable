@@ -14,7 +14,7 @@ cc1() { f=$1; m=$(basename "$(dirname "$f")"); b=$(basename "$f" .c); o="build/o
 export -f cc1
 ls generated/main/*.c generated/sdk/*.c | xargs -P "${JOBS:-16}" -I{} bash -c 'cc1 {}'
 for f in loader dispatch kernel ipc fnprof platform/windows services/fs services/romfs_virtual services/am services/acc \
-         services/time services/hid_set services/misc hle/heaps hle/pl hle/vi hle/nvn_boot hle/fibers hle/framepace host/stubs host/settings_boot host/gamelib_static host/main_boot diag/diag diag/sampler diag/watchdog diag/crashdump; do
+         services/time services/hid_set services/misc hle/heaps hle/pl hle/vi hle/nvn_boot hle/fibers hle/framepace hle/graphics host/stubs host/settings_boot host/gamelib_static host/main_boot diag/diag diag/sampler diag/watchdog diag/crashdump; do
   $Z -c runtime/$f.c -o build/rt/$(echo $f | tr / _).o $CF -DGAMELIB_ID='"dev"'
 done
 # (the window-less boot exe is a dev leftover from M3; XCDE_SKIP_BOOT_LINK=1 builds only the game objects - scripts/build_all.sh)

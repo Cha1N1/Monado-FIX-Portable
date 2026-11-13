@@ -11,6 +11,7 @@
 
 #include "vk.h"
 #include "texture_index.h"
+#include "../../settings.h"  // [XCDE] texture filtering option
 #include "shaders.h"
 void vk_watch(VkImage dst, const char *site);  // [XCDE] debugging: log writes to a watched image
 #include "../astc.h"
@@ -1343,8 +1344,14 @@ static VkCompareOp compare_op(uint32_t f) {
     }
 }
 
+// [XCDE] T-ANISO: one immutable sampler per texture-filtering choice (Original, 2x..16x), so the F1 option applies live.
+// All variants are retained until device teardown: command buffers may still reference the previous one.
+typedef struct { VkSampler variant[5]; } SamplerVariants;
 VkSampler vk_sampler(NvnSamplerDesc *d) {
-    if (d->backend) return (VkSampler)d->backend;
+    int filtering = g_settings.graphics.value[GFX_FILTERING];
+    if (filtering < 0 || filtering > 4) filtering = 0;
+    SamplerVariants *variants = d->backend;
+    if (variants && variants->variant[filtering]) return variants->variant[filtering];
     VkSamplerCreateInfo si = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     si.magFilter = d->mag_filter == 1 ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
     uint32_t mf = d->min_filter;
@@ -1412,9 +1419,22 @@ VkSampler vk_sampler(NvnSamplerDesc *d) {
             si.pNext = &cb;
         } else si.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     }
+    // [XCDE] T-ANISO: explicit filtering levels for mipmapped linear colour samplers only; point, non-mipmapped,
+    // comparison and min/max-reduction samplers (UI, shadows, specialized passes) keep what the game asked for.
+    if (filtering && (mf == 3 || mf == 5) && si.magFilter == VK_FILTER_LINEAR && !d->compare_mode && d->reduction == 0) {
+        si.anisotropyEnable = VK_TRUE;
+        si.maxAnisotropy = (float)(1u << filtering);
+    }
+    if (!g_vk.sampler_anisotropy) si.anisotropyEnable = VK_FALSE;  // (the feature and the limit, for every path)
+    if (si.anisotropyEnable) si.maxAnisotropy = fmaxf(1.0f, fminf(si.maxAnisotropy, g_vk.props.limits.maxSamplerAnisotropy));
     VkSampler s;
     VK_CHECK(vkCreateSampler(g_vk.dev, &si, NULL, &s));
-    d->backend = (void *)s;
+    if (!variants) {
+        variants = calloc(1, sizeof *variants);
+        if (!variants) FATAL("sampler variant allocation failed\n");
+        d->backend = variants;
+    }
+    variants->variant[filtering] = s;
     return s;
 }
 

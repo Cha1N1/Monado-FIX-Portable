@@ -20,6 +20,7 @@
 extern "C" {
 #include "../nvn/vulkan/vk.h"
 #include "../settings.h"
+#include "../graphics_options.h"
 #include "menu.h"
 bool vk_imgui_backend_init(void);
 void input_reset(void);
@@ -270,6 +271,15 @@ static void ui(void) {
             if (ImGui::Checkbox(T("Antialiasing temporal (TAA) del juego (al reiniciar)"), &taa)) g_settings.taa_off = !taa;
             ImGui::Checkbox(g_settings.ui_lang ? "On-screen FPS counter" : "Contador FPS en pantalla", &g_settings.fps_overlay);
             ImGui::Checkbox(T("Mostrar FPS en la barra de título"), &g_settings.show_fps);
+            ImGui::SeparatorText(g_settings.ui_lang ? "Shadows, detail and effects" : "Sombras, detalle y efectos");  // [XCDE]
+            for (int i : gfx_ui_options) {
+                const char *items[5];
+                for (int v = 0; v < gfx_count(i); v++) items[v] = gfx_display_lang(i, v, g_settings.ui_lang);
+                if (ImGui::Combo(gfx_label(i, g_settings.ui_lang), &g_settings.graphics.value[i], items, gfx_count(i)))
+                    xcde_graphics_publish(&g_settings.graphics);  // (live; the ones marked "restart" apply at the next start)
+            }
+            ImGui::TextDisabled("%s", g_settings.ui_lang ? "Original keeps the game's (and mods') own values."
+                                                         : "Original conserva los valores del juego (y de los mods).");
             ImGui::SeparatorText(T("Velocidad"));
             if (ImGui::Checkbox(T("V-Sync (con 30 / 60 FPS)"), &g_settings.vsync)) vk_request_swapchain_recreate();
             monado_effect_controls(&g_settings,g_settings.ui_lang!=0);

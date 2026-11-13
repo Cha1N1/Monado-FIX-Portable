@@ -116,6 +116,9 @@ static void maybe_edit(File *f) {
     // for; tmaa=off below already follows taa_off otherwise.
     else if ((g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS) && g_settings.taa_off)
         strcat(edits, "AntiAliasing=off");
+    if (g_settings.graphics.value[GFX_SHADOW_MASK] == 1) {  // [XCDE] full-resolution shadow mask (restart)
+        if (*edits) strcat(edits, ","); strcat(edits, "shadowHalf=off");
+    }
     // [XCDE] xcde.ini taa = 0 (or the revived jitter): the game's temporal AA off; its other AA and motion blur as above
     {
         extern bool tmp_jitter_active(void);

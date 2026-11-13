@@ -23,6 +23,7 @@
 #include "../../runtime/ui/gpu_picker.h"
 #include "../../runtime/ui/theme.h"
 #include "../../runtime/ui/quality_controls.h"
+#include "../../runtime/graphics_options.h"
 // [XCDE] GitHub #18: the build ids of the game NSOs this exe's code was lifted from (gen.py writes these
 // with the functions). Older checkouts without them build fine, just without the version check below.
 #if __has_include("../../generated/main/main_id.h")
@@ -101,6 +102,7 @@ struct Cfg {
     int gpu_profile = 0, gpu_gpl = -1;
     int occlusion = -1;     // [XCDE][FSR3] -1 automatic (off on AMD iGPUs), 0 off, 1 on (xcde.ini occlusion)
     int amd_fix = -1;       // issue #7: -1 automatic (on for AMD RDNA 3), 0 off, 1 on (xcde.ini amd_fix)
+    GraphicsOptions graphics = {};  // [XCDE] graphics options (xcde.ini keys in graphics_options.h)
     int session_fix = -1;   // issue #25: -1 automatic (worker stays on), 0 off, 1 on = no async render worker (xcde.ini session_fix)
     bool gpu_memory_budget = true, gpu_performance = false, gpu_keep_heavy = false;
     bool fullscreen = false;
@@ -419,6 +421,7 @@ static void load() {
         else if (!strcmp(k, "amd_fix")) g.amd_fix = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
         else if (!strcmp(k, "session_fix")) g.session_fix = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
         else if (!strcmp(k, "rumble")) g.rumble = atoi(v) != 0;
+        else if (gfx_load_key(&g.graphics, k, v)) {}  // [XCDE]
         else if (!strcmp(k, "gpu_preset")) { g.quality_preset=xcde_quality_parse(v); g.gpu_performance=g.quality_preset==QUALITY_PERFORMANCE || g.quality_preset==QUALITY_POTATO; }
         else if (!strcmp(k, "low_memory")) g.gpu_performance=atoi(v)!=0;
         else if (!strcmp(k, "dynamic_min_height")) g.dynamic_min_height=std::clamp(atoi(v),0,4320);
@@ -461,6 +464,7 @@ static bool save() {
     fprintf(f, "occlusion = %s\n", g.occlusion == 1 ? "on" : g.occlusion == 0 ? "off" : "auto");
     fprintf(f, "amd_fix = %s\n", g.amd_fix == 1 ? "on" : g.amd_fix == 0 ? "off" : "auto");
     fprintf(f, "session_fix = %s\n", g.session_fix == 1 ? "on" : g.session_fix == 0 ? "off" : "auto");
+    gfx_save(f, &g.graphics);  // [XCDE]
     fprintf(f,"low_memory = %d\ndynamic_min_height = %d\ndynamic_max_height = %d\neffects_off = %u\n",g.gpu_performance,g.dynamic_min_height,g.dynamic_max_height,g.effects_off);
     fprintf(f, "fullscreen = %d\nwindow = %s\nresolution = %s\nupscaler = %s\nantialias = %s\nshow_fps = %d\n", g.fullscreen,
             k_wins[g.win], k_res_ini[g.res], g.upscaler_auto ? "auto" : k_ups_ini[g.upscaler], g.smaa ? "smaa" : "off", g.show_fps);
@@ -947,6 +951,19 @@ static void tab_graphics() {
     ImGui::SetItemTooltip(T("Solo el TAA, sin tocar el desenfoque de movimiento ni el del pelo.\nDesactivado: quita el emborronado del TAA (combínalo con SMAA para los bordes)."));
     ImGui::Checkbox(g.ui_lang ? "On-screen FPS counter" : "Contador FPS en pantalla", &g.fps_overlay);
     ImGui::Checkbox(T("Mostrar FPS en la barra de título"), &g.show_fps);
+    ImGui::SeparatorText(g.ui_lang ? "Shadows, detail and effects" : "Sombras, detalle y efectos");  // [XCDE]
+    for (int i : gfx_ui_options) {
+        const char *items[5];
+        for (int v = 0; v < gfx_count(i); v++) items[v] = gfx_display_lang(i, v, g.ui_lang);
+        ImGui::SetNextItemWidth(260 * g_scale);
+        monado_combo(gfx_label(i, g.ui_lang), &g.graphics.value[i], items, gfx_count(i));
+        if (i == GFX_SHADOWS) ImGui::SetItemTooltip("%s", g.ui_lang ? "Off removes dynamic shadow shading (cloud shadows too); baked shading stays."
+                                                                   : "Desactivado quita el sombreado dinámico (también las sombras de nubes); el sombreado precalculado se queda.");
+        if (i == GFX_PROP_LOD) ImGui::SetItemTooltip("%s", g.ui_lang ? "Intermediate mesh-LOD transitions of recognized trees, ivy and rocks only; final distances stay."
+                                                                    : "Solo las transiciones intermedias de LOD de árboles, hiedra y rocas reconocidos; las distancias finales no cambian.");
+    }
+    ImGui::TextDisabled("%s", g.ui_lang ? "Original keeps the game's (and mods') own values. Also in F1 (live, except \"restart\")."
+                                        : "Original conserva los valores del juego (y de los mods). También en F1 (en vivo, salvo \"al reiniciar\").");
     ImGui::SeparatorText(T("Velocidad"));
     ImGui::Checkbox(T("V-Sync (con 30 / 60 FPS)"), &g.vsync);
     ImGui::SetItemTooltip(T("Cada imagen se muestra exactamente una vez, sincronizada con la pantalla: movimiento\n"
