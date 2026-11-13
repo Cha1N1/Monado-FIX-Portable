@@ -213,10 +213,20 @@ static void mouse_stick(int32_t *rx, int32_t *ry) {
     *rx += sx, *ry += sy;
 }
 
-static bool g_lt_combo;                         // (party mod) a switch was made while L2 was held
-static _Atomic uint64_t lt_pulse_bits;          // the buttons L2 drives, sent briefly after a lone L2 press
-static _Atomic uint64_t lt_pulse_until;         // (SDL ticks, ms)
-static uint64_t lt_pulse(void) { return SDL_GetTicks() < lt_pulse_until ? lt_pulse_bits : 0; }
+// [XCDE] party mod: L2 is a modifier only while it is undecided. L2 + L1 / R1 within LT_DECIDE_MS is a party switch
+// (L2, L1, R1 hidden from the game until L2 is let go); a lone tap reaches the game as a short press; a lone hold of
+// LT_DECIDE_MS or more reaches the game as a hold (its camera menu: "Move Camera" needs L2 held - GitHub #70) and L1 /
+// R1 then reach the game as usual until L2 is let go.
+#define LT_DECIDE_MS 300
+static _Atomic bool g_lt_combo;                 // (party mod) a switch was made while L2 was held
+static _Atomic uint64_t lt_bits;                // the buttons L2 drives
+static _Atomic uint64_t lt_down_at;             // (SDL ticks, ms) when the held L2 went down; 0: not held
+static _Atomic uint64_t lt_pulse_until;         // (SDL ticks, ms) a lone tap's short press
+static bool lt_passthrough(void) {              // a lone L2 held long enough: it belongs to the game
+    uint64_t t = lt_down_at;
+    return t && !g_lt_combo && SDL_GetTicks() - t >= LT_DECIDE_MS;
+}
+static uint64_t lt_pulse(void) { return SDL_GetTicks() < lt_pulse_until || lt_passthrough() ? lt_bits : 0; }
 
 // Controller buttons (and the triggers as buttons) -> Switch buttons through g_bind_pad; the sticks stay the sticks.
 static void stick_deadzone(int32_t *x, int32_t *y);  // (below)
@@ -228,23 +238,30 @@ static void recompute_pad(void) {
         if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) host |= 1u << PADB_LTRIGGER;
         if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000) host |= 1u << PADB_RTRIGGER;
     }
-    {   // [XCDE] party mod (L2 + L1 / R1, as Xenoblade 3): while L2 is held it is a modifier - L2, L1 and R1 don't reach
-        // the game (no camera-mode toggle, no target change); L2 let go without a switch reaches it as a short press.
+    {   // [XCDE] party mod (L2 + L1 / R1, as Xenoblade 3; see LT_DECIDE_MS above). L2 itself always goes to the game
+        // through lt_pulse(): as a short press after a lone tap, as a hold once a lone hold is decided.
         extern bool g_party_switch;
         static bool lt_was;
         bool lt = host >> PADB_LTRIGGER & 1;
         if (g_party_switch && !host_test) {
-            if (lt) host &= ~((1u << PADB_LTRIGGER) | (1u << SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) | (1u << SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER));
+            uint64_t now = SDL_GetTicks();
+            if (lt && !lt_was) {
+                uint64_t pb = 0;
+                for (int i = 0; i < BIND_PAD_COUNT; i++) if (g_bind_pad[i] == PADB_LTRIGGER) pb |= 1ull << i;
+                lt_bits = pb;
+                g_lt_combo = false;
+                lt_down_at = now ? now : 1;
+            }
+            if (lt) {
+                host &= ~(1u << PADB_LTRIGGER);
+                if (!lt_passthrough()) host &= ~((1u << SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) | (1u << SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER));
+            }
             if (lt_was && !lt) {
-                if (!g_lt_combo) {
-                    uint64_t pb = 0;
-                    for (int i = 0; i < BIND_PAD_COUNT; i++) if (g_bind_pad[i] == PADB_LTRIGGER) pb |= 1ull << i;
-                    lt_pulse_bits = pb;
-                    lt_pulse_until = SDL_GetTicks() + 80;
-                }
+                if (!g_lt_combo && now - lt_down_at < LT_DECIDE_MS) lt_pulse_until = now + 80;  // a lone tap
+                lt_down_at = 0;
                 g_lt_combo = false;
             }
-        }
+        } else lt_down_at = 0;
         lt_was = lt;
     }
     {   // [XCDE] GitHub #22: Start + Select held = the F1 quick menu (the launcher's options over the running game).
@@ -469,9 +486,10 @@ void input_handle_event(const SDL_Event *e) {
         recompute_pad();
         // [XCDE] party mod, as Xenoblade 3: hold L2 and press L1 / R1 = the member above / below. (recompute_pad hides L1 /
         // R1 from the game while L2 is held, so the target doesn't change too.)
+        // Not once a lone L2 hold went to the game (lt_passthrough): then L1 / R1 are the game's.
         if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && pad &&
             (e->gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER || e->gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) &&
-            SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) {
+            SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000 && !lt_passthrough()) {
             extern void party_switch_request(int step);
             party_switch_request(e->gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER ? -1 : 1);
             g_lt_combo = true;
