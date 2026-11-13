@@ -482,6 +482,16 @@ static const char *builtin_src(const char *name, int *stage) {
     // whatever the HUD covered - in the main menu the field hints in the game's captured background showed as a text
     // outline over the character cards (user shot). Faint overlays still get the upscaled scene under them.
     // a.xy = 1 / window size.
+    if (!strcmp(name, "tmp_srgb.frag")) {  // [XCDE] the native upscalers' linear output back to the swapchain's sRGB values
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() { vec3 c = max(texture(t, gl_FragCoord.xy * pc.a.xy).rgb, vec3(0.0));\n"
+               "vec3 s = mix(1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, c * 12.92, lessThanEqual(c, vec3(0.0031308)));\n"
+               "o = vec4(s, 1.0); }\n";
+    }
     if (!strcmp(name, "tmp_hud.frag")) {
         *stage = STAGE_FRAGMENT;
         return "#version 450\n"
@@ -708,7 +718,7 @@ static const char *builtin_src(const char *name, int *stage) {
                "layout(set = 0, binding = 1) uniform sampler2D depthTex;\n"
                "layout(set = 0, binding = 2) uniform sampler2D sceneTex;\n"  // [XCDE] the game image before the HUD
                "layout(set = 0, binding = 3) uniform sampler2D velTex;\n"  // [XCDE] T215: the game's velocity buffer
-               "layout(push_constant) uniform P { mat4 m; vec4 a; vec4 b; } pc;\n"
+               "layout(push_constant) uniform P { mat4 m; vec4 a; vec4 b; vec4 c; } pc;\n"
                "layout(location = 0) out vec4 oColor;\n"
                "layout(location = 1) out vec2 oMv;\n"
                "layout(location = 2) out float oDepth;\n"
@@ -718,7 +728,9 @@ static const char *builtin_src(const char *name, int *stage) {
                "  ivec2 csz = textureSize(colorTex, 0), dsz = textureSize(depthTex, 0);\n"
                "  ivec2 cp = min(ivec2(vec2(p) * vec2(csz) / pc.a.zw), csz - 1);\n"
                "  vec3 c = texelFetch(colorTex, cp, 0).rgb;\n"
-               "  oColor = vec4(c, 1.0);\n"
+               // [XCDE] T-LINUX-FSR3 / T-FSR4-LITE: the native Linux upscalers take linear colour (pc.c.x)
+               "  vec3 lin = mix(pow((max(c, vec3(0.0)) + 0.055) / 1.055, vec3(2.4)), c / 12.92, lessThanEqual(c, vec3(0.04045)));\n"
+               "  oColor = vec4(pc.c.x > 0.5 ? lin : c, 1.0);\n"
                "  vec3 dh = abs(c - texelFetch(sceneTex, min(cp, textureSize(sceneTex, 0) - 1), 0).rgb);\n"
                "  oHud = max(dh.r, max(dh.g, dh.b)) > 1.5 / 255.0 ? 1.0 : 0.0;\n"  // (pixels the HUD passes changed)
                "  float d = texelFetch(depthTex, min(ivec2(vec2(p) * vec2(dsz) / pc.a.zw), dsz - 1), 0).r;\n"

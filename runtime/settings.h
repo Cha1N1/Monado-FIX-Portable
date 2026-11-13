@@ -10,7 +10,8 @@ enum { ASPECT_UNLOCKED = 0, ASPECT_ORIGINAL = 1 };
 enum { RES_MATCH = 0, /* 1..8 = 1x..8x */ RES_DYNAMIC = 9, RES_Q75 = 10, RES_Q25 = 11, RES_Q50 = 12 };
 // (11 was 67% of the display: larecomp.ini "67%" now loads as RES_Q75)
 enum { UPSCALE_BILINEAR = 0, UPSCALE_METALFX = 1 /* macOS */, UPSCALE_FSR1 = 2 /* Windows: AMD FSR 1 */,
-       UPSCALE_FSR3 = 3 /* [XCDE] AMD FSR 3.1 (temporal) */, UPSCALE_DLSS = 4 /* [XCDE] NVIDIA DLSS (temporal) */ };
+       UPSCALE_FSR3 = 3 /* [XCDE] AMD FSR 3.1 (temporal) */, UPSCALE_DLSS = 4 /* [XCDE] NVIDIA DLSS (temporal) */,
+       UPSCALE_FSR4_LITE = 5 /* [XCDE] T-FSR4-LITE: native Vulkan FSR 4.1.2 Lite INT8 (Linux) */ };
 // [XCDE] temporal upscalers' quality mode: render size = output / ratio (1, 1.5, 1.7, 2, 3)
 enum { UQ_NATIVE = 0, UQ_QUALITY = 1, UQ_BALANCED = 2, UQ_PERFORMANCE = 3, UQ_ULTRA = 4 };
 #ifdef __APPLE__

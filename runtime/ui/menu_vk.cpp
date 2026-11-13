@@ -165,6 +165,7 @@ static void feed(ImGuiIO &io, uint32_t w, uint32_t h) {
 // [XCDE] the menu's language follows the launcher's (xcde.ini launcher_lang; g_settings.ui_lang 1 = English): the
 // Spanish text is the key, T() gives the English one.
 static const char *const k_en[][2] = {
+    {"AMD FSR 4 Lite (temporal, nativo)", "AMD FSR 4 Lite (temporal, native)"},  // [XCDE] T-FSR4-LITE
     {"Igual que la ventana (recomendado)", "Match the window (recommended)"}, {"1x - 720p (como Switch)", "1x - 720p (like Switch)"},
     {"75 % de la ventana", "75 % of the window"}, {"50 % de la ventana", "50 % of the window"},
     {"Dinámica (según objetivo FPS)", "Dynamic (follows FPS target)"}, {"Opciones  (F1 / Esc para volver al juego)", "Options  (F1 / Esc to go back to the game)"},
@@ -237,14 +238,20 @@ static void ui(void) {
                 ImGui::TextWrapped(g_settings.ui_lang
                     ? "An Nx resolution keeps the Switch's line count: in windows wider or taller than 16:9 it is stretched. \"Same as the window\" stays sharp."
                     : "Una resolución Nx mantiene las líneas de la Switch: en ventanas m\xC3\xA1s anchas o altas que 16:9 se estira. \xC2\xABIgual que la ventana\xC2\xBB lo mantiene n\xC3\xADtido.");
-            static const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal)", "NVIDIA DLSS (temporal, RTX)"};
-            static const int upv[] = {UPSCALE_BILINEAR, UPSCALE_FSR1, UPSCALE_FSR3, UPSCALE_DLSS};
+            static const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal)", "NVIDIA DLSS (temporal, RTX)",
+                                        "AMD FSR 4 Lite (temporal, nativo)"};
+            static const int upv[] = {UPSCALE_BILINEAR, UPSCALE_FSR1, UPSCALE_FSR3, UPSCALE_DLSS, UPSCALE_FSR4_LITE};
+#ifdef __linux__
+            const int nups = 5;  // [XCDE] T-FSR4-LITE: the native Linux component
+#else
+            const int nups = 4;
+#endif
             int ui_ = 0;
-            for (int i = 0; i < 4; i++) if (upv[i] == g_settings.upscaler) ui_ = i;
+            for (int i = 0; i < nups; i++) if (upv[i] == g_settings.upscaler) ui_ = i;
             const char *preview = g_settings.upscaler_auto ? (g_settings.ui_lang ? "Automatic (DLSS on supported RTX)" : "Automático (DLSS en RTX compatible)") : T(ups[ui_]);
             if (monado_begin_combo(T("Escalado / antialiasing"), preview)) {
                 if (ImGui::Selectable(g_settings.ui_lang ? "Automatic (restart)" : "Automático (reiniciar)", g_settings.upscaler_auto)) g_settings.upscaler_auto = true;
-                for (int i = 0; i < 4; ++i) {
+                for (int i = 0; i < nups; ++i) {
                     bool unavailable = i == 3 && !dlss_available();
                     ImGui::BeginDisabled(unavailable);
                     if (ImGui::Selectable(T(ups[i]), !g_settings.upscaler_auto && ui_ == i)) { g_settings.upscaler_auto = false; g_settings.upscaler = upv[i]; }
@@ -253,7 +260,7 @@ static void ui(void) {
                 }
                 ImGui::EndCombo();
             }
-            if (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS) {
+            if (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS || g_settings.upscaler == UPSCALE_FSR4_LITE) {
                 static const char *uq[] = {"Nativo (solo antialiasing)", "Calidad (67 %)", "Equilibrado (59 %)", "Rendimiento (50 %)",
                                            "Ultra rendimiento (33 %)"};
                 monado_combo(T("Calidad del escalado"), &g_settings.upscale_quality, TL(uq, 5).p, 5);
