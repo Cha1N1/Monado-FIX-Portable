@@ -71,5 +71,6 @@ sources and licences) and the non-system libraries; GPU drivers, the Vulkan load
 (build on the oldest distribution you want to run it on). Its mount is read-only, so `xcde.ini`, `cache/`, saves
 and logs live in `~/.local/share/lasrecomp` (or `MONADO_DATA_ROOT`), which gets a `targets` link to the dump and a
 `build/linux/monado` link to the packaged game: the launcher and the game use the same layout as a checkout.
-The dump: the argument, `MONADO_GAME_ROOT`, a `targets/` folder next to the AppImage, or the one used last time.
+The dump: the argument, `MONADO_GAME_ROOT`, a `targets/` folder next to the AppImage, the one chosen with the
+launcher's **Select game dump** button (also in a checkout: it links `targets/` there), or the one used last time.
 Needs [appimagetool](https://github.com/AppImage/appimagetool).

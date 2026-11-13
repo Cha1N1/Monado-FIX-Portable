@@ -583,6 +583,54 @@ static bool g_mod_dirty;
 static bool g_launched_ok;  // (launch() started the game: the launcher closes)
 static float g_scale = 1;
 
+#ifndef _WIN32
+// [XCDE] T-LINUX-DUMP-PICKER: choose the dump folder with the desktop's folder dialog. The game and the launcher read it
+// as targets/ (here a link, which the AppImage's AppRun also maintains): the choice is remembered by that link.
+// A real targets/ folder (a dump copied into the checkout) is never replaced.
+static SDL_Mutex *g_dump_lock;
+static bool g_dump_pending, g_dump_ready;
+static std::string g_dump_selected, g_dump_error;
+static void SDLCALL dump_selected(void *, const char *const *files, int) {
+    SDL_LockMutex(g_dump_lock);
+    g_dump_selected = files && files[0] ? files[0] : "";
+    g_dump_error = files ? "" : std::string("Could not open the folder dialog: ") + SDL_GetError();
+    g_dump_ready = true;
+    SDL_UnlockMutex(g_dump_lock);
+}
+static void check_game_version();
+static void dump_poll() {
+    if (!g_dump_lock) return;
+    SDL_LockMutex(g_dump_lock);
+    bool ready = g_dump_ready;
+    std::string chosen = g_dump_selected, error = g_dump_error;
+    g_dump_ready = false;
+    SDL_UnlockMutex(g_dump_lock);
+    if (!ready) return;
+    g_dump_pending = false;
+    if (!error.empty()) { g_status = error; return; }
+    if (chosen.empty()) return;  // (cancel: keep the current dump)
+    SDL_PathInfo pi;
+    if (!SDL_GetPathInfo((chosen + "/exefs/main").c_str(), &pi) || !SDL_GetPathInfo((chosen + "/romfs").c_str(), &pi) ||
+        pi.type != SDL_PATHTYPE_DIRECTORY) {
+        g_status = g.ui_lang ? "Not a dump: choose the folder that contains exefs/main and romfs/." :
+                               "No es un volcado: elige la carpeta que contiene exefs/main y romfs/.";
+        return;
+    }
+    std::string link = path("targets");
+    struct stat ls;
+    if (lstat(link.c_str(), &ls) == 0 && !S_ISLNK(ls.st_mode)) {
+        g_status = g.ui_lang ? "targets/ is a real folder here: move or rename it to use another dump." :
+                               "targets/ es una carpeta real: muévela o renómbrala para usar otro volcado.";
+        return;
+    }
+    remove(link.c_str());
+    if (symlink(chosen.c_str(), link.c_str()) != 0) { g_status = std::string("Could not link targets/: ") + strerror(errno); return; }
+    g_mismatch_desc[0] = 0;
+    check_game_version();  // [XCDE] GitHub #18: the version check again, for the new files
+    g_status = g.ui_lang ? "Game dump selected." : "Volcado del juego seleccionado.";
+}
+#endif
+
 static void launch() {
     if (!save()) { g_status = T("No se pudo escribir xcde.ini"); return; }
 #ifdef _WIN32
@@ -1480,6 +1528,22 @@ int main(int argc, char **argv) {
         }
         ImGui::PopItemWidth(); ImGui::EndChild();
         ImGui::Separator();
+#ifndef _WIN32
+        if (g_dump_pending) {
+            dump_poll();
+            have_game = exists("targets/exefs/main") || exists("targets/exefs");  // (the dump may have changed)
+        }
+        ImGui::BeginDisabled(pc_running() || g_dump_pending);
+        if (ImGui::Button(g_dump_pending ? "..." : g.ui_lang ? "Select game dump" : "Elegir volcado del juego")) {
+            if (!g_dump_lock) g_dump_lock = SDL_CreateMutex();
+            g_dump_pending = true;
+            SDL_ShowOpenFolderDialog(dump_selected, nullptr, win, NULL, false);
+        }
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("%s", g.ui_lang ? "The folder with exefs/ and romfs/ (version 2.0.0). Remembered as targets/."
+                                              : "La carpeta con exefs/ y romfs/ (versión 2.0.0). Se recuerda como targets/.");
+        ImGui::SameLine();
+#endif
         if (!have_game) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", T("Faltan los archivos del juego en targets/ (exefs y romfs de tu copia)."));
         else if (!have_exe) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", T("Falta build/xcde.exe (compila el juego primero)."));
         else if (*g_mismatch_desc) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), g.ui_lang ?
