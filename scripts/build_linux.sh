@@ -53,7 +53,11 @@ for f in "${nvn[@]}"; do rt+=("nvn/$f"); done
 for f in "${rt[@]}"; do
   obj="$rtdir/${f//\//_}.o"
   echo "CC $f"
-  "$CC" "${flags[@]}" -DXCDE_GFX -Ithird_party/smaa/Textures -c "runtime/$f.c" -o "$obj"
+  # [XCDE] T-RUNTIME-O2: the two Vulkan units that dominate the render thread's CPU time get -O2 (measured +5-9 %
+  # FPS on RADV); everything else, the game code and the FP / aliasing policy stay as they are.
+  unit_flags=()
+  case "$f" in nvn/vulkan/exec|nvn/vulkan/textures) unit_flags=(-O2);; esac
+  "$CC" "${flags[@]}" "${unit_flags[@]}" -DXCDE_GFX -Ithird_party/smaa/Textures -c "runtime/$f.c" -o "$obj"
   objects+=("$obj")
 done
 cpp=(third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp third_party/imgui/imgui_tables.cpp
