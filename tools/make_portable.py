@@ -12,6 +12,11 @@ NOT copied: cache/ (shader caches are rebuilt on each PC by the launcher's "Prec
 copies the portable part). targets/ is copied as real files and verified (no links to your original folder).
 
 The folder contains the game: it is for your own use. Do not share it (Constitution art. I).
+
+--release instead packages a runtime built with CMake -DMONADO_RELEASE=ON: NO game code, no game files, no saves,
+settings, caches or mods, so it can be published. The launcher builds the game code once from the player's own
+targets/ with the packaged builder (build/gamebuild: tools/gamebuild_stage.py + tools/freeze_gamebuild.py). The
+result is checked with tools/package_guard.py.
 Only the standard library is used.
 """
 import argparse
@@ -231,9 +236,15 @@ def main():
     ap.add_argument('--with-fsr4-assets', action='store_true',
                     help='also copy the prepared FSR 4 Lite model files (build/fsr4/lite): AMD licence terms, '
                          'third_party/fsr4_native/LICENSE-AMD-SDK.md; without them FSR 4 Lite is unavailable')
+    ap.add_argument('--release', action='store_true',
+                    help='publishable package: runtime without game code + the first-start builder (implies --no-game '
+                         '--no-saves; no xcde.ini, mods or cache)')
     ap.add_argument('--bundle-vulkan', action='store_true',
                     help='also copy MSYS2\'s vulkan-1.dll (by default the GPU driver\'s own loader is used)')
     a = ap.parse_args()
+    if a.release:
+        a.no_game = a.no_saves = True
+        a.with_cache = False
 
     os.chdir(REPO)
     out = os.path.abspath(a.out)
@@ -245,6 +256,12 @@ def main():
             sys.exit(f'{e} not found. Build first ("Build Monado.bat").')
     if not a.no_game and not os.path.isdir('targets/exefs'):
         sys.exit('targets/exefs not found (your game files). Run "Build Monado.bat" first, or use --no-game.')
+
+    if a.release:
+        for name in ('link.json', 'gamelib-id.txt', 'monado-gamebuild.exe', 'xcde_imports.a'):
+            if not os.path.isfile(os.path.join('build', 'gamebuild', name)):
+                sys.exit(f'build/gamebuild/{name} not found: stage the builder (tools/gamebuild_stage.py --platform windows '
+                         '--link-file xcde_imports.a), build with CMake -DMONADO_RELEASE=ON, then tools/freeze_gamebuild.py')
 
     msys = find_msys_bin(a.msys)
     build_dlls = [os.path.join('build', f) for f in os.listdir('build') if f.lower().endswith('.dll')]
@@ -277,6 +294,9 @@ def main():
             copy_tree(lite, os.path.join(out, 'build', 'fsr4', 'lite'), 'FSR 4 Lite model files/')
             shutil.copy2(os.path.join('third_party', 'fsr4_native', 'LICENSE-AMD-SDK.md'),
                          os.path.join(out, 'build', 'fsr4', 'LICENSE-AMD-SDK.md'))
+        elif os.path.isfile(os.path.join('build', 'fsr4prep', 'monado-fsr4prep.exe')):
+            # no model files: the launcher's "Prepare FSR 4 Lite" makes them on the player's PC (build/fsr4prep)
+            copy_tree(os.path.join('build', 'fsr4prep'), os.path.join(out, 'build', 'fsr4prep'), 'FSR 4 Lite preparation tool/')
         else:
             print('  note: monado_fsr4.dll without its model files (--with-fsr4-assets): FSR 4 Lite will be unavailable')
     if os.path.isdir(os.path.join('build', 'dlss-licenses')):
@@ -291,8 +311,18 @@ def main():
 
     if not a.no_game:
         copy_game(out)
+    if a.release:
+        copy_tree(os.path.join('build', 'gamebuild'), os.path.join(out, 'build', 'gamebuild'), 'first-start game code builder/')
+        for leftover in ('obj', 'generated'):
+            shutil.rmtree(os.path.join(out, 'build', 'gamebuild', leftover), ignore_errors=True)
+        # (no targets/ folder in the package itself: tools/package_guard.py refuses one in anything published)
+        with open(os.path.join(out, 'GAME FILES - READ ME.txt'), 'w', newline='\r\n') as f:
+            f.write('Create a folder named targets next to this file and copy the exefs and romfs folders of your own\n'
+                    'Xenoblade Chronicles: Definitive Edition 2.0.0 dump into it, so that targets\\exefs\\main and\n'
+                    'targets\\romfs exist. Then start "Play Monado.bat": on first start the launcher builds the game code\n'
+                    'from your files (a few minutes, once). No game files or game code are included in this package.\n')
     copy_tree('data', os.path.join(out, 'data'), 'data/')
-    if os.path.isdir('mods'):
+    if os.path.isdir('mods') and not a.release:
         copy_tree('mods', os.path.join(out, 'mods'), 'mods/')
     if a.with_cache:
         if os.path.isdir('cache/spirv'):
@@ -302,8 +332,8 @@ def main():
             shutil.copy2('cache/variants.bin', os.path.join(out, 'cache', 'variants.bin'))
     if not a.no_saves and os.path.isdir('save'):
         copy_tree('save', os.path.join(out, 'save'), 'save/')
-    for settings in ('xcde.ini', 'xcde_env.ini'):
-        if os.path.isfile(settings):
+    for settings in ('xcde.ini', 'xcde_env.ini'):  # (player settings: never in a release package)
+        if os.path.isfile(settings) and not a.release:
             shutil.copy2(settings, os.path.join(out, settings))
     with open(os.path.join(out, 'Play Monado.bat'), 'w', newline='') as f:
         f.write(PLAY_BAT)
@@ -319,6 +349,11 @@ def main():
         print('WARNING: not found in the portable folder (and not in System32): ' + ', '.join(unresolved))
     else:
         print('Check: every DLL the programs import is inside build\\ or comes with Windows.')
+    if a.release:
+        guard = subprocess.run([sys.executable, os.path.join(HERE, 'package_guard.py'), out])
+        if guard.returncode != 0:
+            sys.exit('package_guard: the package holds game or derived files (see above)')
+        print('Release package: no game code or game files (checked with tools/package_guard.py).')
     print(f'\nDone. Move or copy the folder anywhere and start "Play Monado.bat".\n{out}')
     print('First run on each PC: press "Precompile shaders" once in the launcher (a few minutes), then PLAY.')
 

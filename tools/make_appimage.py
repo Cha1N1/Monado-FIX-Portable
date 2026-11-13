@@ -6,6 +6,10 @@ FSR 3 / FSR 4 Lite components when they were built (with their sources and licen
 the non-system shared libraries they need. GPU drivers, the Vulkan loader and glibc always come from the host.
 
   python3 tools/make_appimage.py [--output build/Monado-x86_64.AppImage] [--appimagetool appimagetool]
+
+--release packages a runtime built with CMake -DMONADO_RELEASE=ON instead: it holds NO game code and can be shared.
+The launcher builds the game code once from the player's own dump with the packaged builder (build/gamebuild:
+tools/gamebuild_stage.py + tools/freeze_gamebuild.py). The packaged tree is checked with tools/package_guard.py.
 Needs appimagetool (https://github.com/AppImage/appimagetool) on PATH or given with --appimagetool.
 """
 import argparse
@@ -42,6 +46,10 @@ def main():
     ap.add_argument('--fsr4-assets', type=Path, default=ROOT / 'build/fsr4/assets', help='prepared FSR 4 Lite assets')
     ap.add_argument('--output', type=Path, default=ROOT / 'build/Monado-x86_64.AppImage')
     ap.add_argument('--appimagetool', default='appimagetool')
+    ap.add_argument('--release', action='store_true', help='runtime without game code + the first-start builder')
+    ap.add_argument('--gamebuild', type=Path, default=ROOT / 'build/gamebuild', help='staged builder (--release)')
+    ap.add_argument('--fsr4prep', type=Path, default=ROOT / 'build/fsr4prep',
+                    help='FSR 4 Lite preparation tool (tools/build_fsr4prep.py): ships FSR 4 without AMD-derived files')
     a = ap.parse_args()
     build, output = a.build.resolve(), a.output.resolve()
     for name in ('monado', 'monado-launcher'):
@@ -49,6 +57,15 @@ def main():
             ap.error(f'missing {build / name}: run scripts/build_linux.sh first (docs/LINUX.md)')
     if shutil.which(a.appimagetool) is None and not Path(a.appimagetool).is_file():
         ap.error(f'{a.appimagetool} not found (https://github.com/AppImage/appimagetool)')
+    if a.release:
+        gamebuild = a.gamebuild.resolve()
+        for name in ('link.json', 'gamelib-id.txt', 'monado-gamebuild'):
+            if not (gamebuild / name).is_file():
+                ap.error(f'missing {gamebuild / name}: run tools/gamebuild_stage.py and tools/freeze_gamebuild.py')
+        # The release runtime must not contain lifted game functions (f_<guest address>).
+        symbols = subprocess.run(['nm', '--defined-only', str(build / 'monado')], text=True, capture_output=True).stdout
+        if re.search(r' f_7[0-9a-f]{9}\b', symbols):
+            ap.error(f'{build / "monado"} contains game code: build it with CMake -DMONADO_RELEASE=ON')
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='monado-appdir-', dir=output.parent) as temp:
         appdir = Path(temp)  # (fresh: no stale files, caches or dumps can enter the package)
@@ -89,6 +106,16 @@ def main():
             shutil.copy2(ROOT / 'runtime/nvn/vulkan/fsr4_api.h', docs / 'fsr4-source/fsr4_api.h')
             shutil.copy2(ROOT / 'scripts/build_fsr4_linux.sh', docs / 'fsr4-source/build_fsr4_linux.sh')
             shutil.copy2(ROOT / 'docs/adr/0012-native-fsr4-lite.md', docs / 'FSR4-LICENSING.md')
+        elif fsr4.is_file() and (a.fsr4prep / 'monado-fsr4prep').is_file():
+            # no model files: the launcher prepares them on the player's PC (AppRun exports XCDE_FSR4PREP_DIR)
+            shutil.copytree(a.fsr4prep.resolve(), share / 'fsr4prep', symlinks=False)
+            for exe in [share / 'fsr4prep/monado-fsr4prep', *(share / 'fsr4prep/bin').iterdir()]:
+                exe.chmod(0o755)
+            shutil.copy2(fsr4, lib / fsr4.name)
+            payloads.append(fsr4)
+            shutil.copytree(ROOT / 'third_party/fsr4_native', docs / 'fsr4-source')
+            shutil.copy2(ROOT / 'runtime/nvn/vulkan/fsr4_api.h', docs / 'fsr4-source/fsr4_api.h')
+            shutil.copy2(ROOT / 'scripts/build_fsr4_linux.sh', docs / 'fsr4-source/build_fsr4_linux.sh')
         else:
             print('note: no FSR 4 Lite component or assets (scripts/build_fsr4_linux.sh, tools/prepare_fsr4_lite.py): '
                   'packaged without it')
@@ -100,6 +127,13 @@ def main():
         for name in ('AppRun', 'monado.desktop', 'monado.svg'):
             shutil.copy2(ROOT / 'packaging/linux' / name, appdir / name)
         shutil.copy2(ROOT / 'data/variants_seed.bin', share / 'variants_seed.bin')
+        if a.release:  # the first-start builder and its resources (AppRun exports XCDE_GAMEBUILD_DIR)
+            shutil.copytree(a.gamebuild.resolve(), share / 'gamebuild', symlinks=False,
+                            ignore=shutil.ignore_patterns('obj', 'generated', 'progress.txt', '*.log'))
+            (share / 'gamebuild/monado-gamebuild').chmod(0o755)
+            guard = subprocess.run(['python3', str(ROOT / 'tools/package_guard.py'), str(appdir)], text=True)
+            if guard.returncode != 0:
+                raise SystemExit('package_guard: the AppImage tree holds game or derived files (see above)')
         for name in ('LICENSE', 'NOTICE.md'):
             shutil.copy2(ROOT / name, docs / name)
         for source in (ROOT / 'third_party').rglob('*'):  # (bundled source dependencies' licence notices)
@@ -112,7 +146,8 @@ def main():
             staged = Path(dest) / output.name
             subprocess.run([a.appimagetool, str(appdir), str(staged)], env=dict(os.environ, ARCH='x86_64'), check=True)
             os.replace(staged, output)
-    print(f'Created {output} (contains the game code recompiled from your dump: for your own use only)')
+    print(f'Created {output} ' + ('(release: no game code; the launcher builds it from the player\'s dump)' if a.release
+                                  else '(contains the game code recompiled from your dump: for your own use only)'))
 
 
 if __name__ == '__main__':

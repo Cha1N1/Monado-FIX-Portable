@@ -950,6 +950,300 @@ static void pc_poll() {
     if (g_pc_then_play) g_pc_play_now = true;
 }
 
+// ------------------------------------------------------------------ game code (release packages)
+// [XCDE] A release package ships the runtime without recompiled game code (CMake MONADO_RELEASE). On first start the
+// launcher runs the packaged builder (tools/gamebuild.py, frozen as monado-gamebuild): it lifts the code from the
+// player's own targets/exefs and links gamebuild/lasgame.{dll,so} in this folder, which the runtime loads
+// (runtime/gamelib.c). Source builds have the code in the executable: no gamebuild/link.json, and everything below
+// reports ready.
+#ifdef _WIN32
+static HANDLE g_gc_proc;
+#define GC_LIB "lasgame.dll"
+#define GC_TOOL "monado-gamebuild.exe"
+#else
+static pid_t g_gc_proc;
+#define GC_LIB "lasgame.so"
+#define GC_TOOL "monado-gamebuild"
+#endif
+static bool g_gc_then_play, g_gc_play_now, g_gc_auto;
+static float g_gc_frac;
+static std::string g_gc_text;
+static std::string gc_dir() {  // the packaged builder and its resources (read-only)
+    const char *env = getenv("XCDE_GAMEBUILD_DIR");  // (AppRun: inside the AppImage)
+    if (env && *env) return env;
+    return path("build/gamebuild");                  // (Windows ZIP: <package>/build/gamebuild)
+}
+static bool gc_available() {
+    SDL_PathInfo pi;
+    return SDL_GetPathInfo((gc_dir() + "/link.json").c_str(), &pi);
+}
+static std::string read_line(const std::string &file) {
+    std::string line;
+    FILE *f = fopen(file.c_str(), "r");
+    if (!f) return line;
+    char buf[128];
+    if (fgets(buf, sizeof buf, f)) line = buf;
+    fclose(f);
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r' || line.back() == ' ')) line.pop_back();
+    return line;
+}
+// A library this runtime accepts: gamebuild/<lib>.id (written by the builder) equals the package's gamelib-id.txt.
+static bool gc_ready() {
+    if (!gc_available()) return true;
+    std::string id = read_line(path("gamebuild/" GC_LIB ".id"));
+    return !id.empty() && id == read_line(gc_dir() + "/gamelib-id.txt");
+}
+static bool gc_running() {
+#ifdef _WIN32
+    return g_gc_proc != NULL;
+#else
+    return g_gc_proc != 0;
+#endif
+}
+static bool gc_start(bool then_play) {
+    if (gc_running() || pc_running() || !gc_available() || gc_ready()) return false;
+    std::string tool = gc_dir() + "/" GC_TOOL;
+    SDL_PathInfo pi;
+    if (!SDL_GetPathInfo(tool.c_str(), &pi)) {
+        g_status = g.ui_lang ? "The package is incomplete: build/gamebuild/" GC_TOOL " is missing." :
+                               "El paquete está incompleto: falta build/gamebuild/" GC_TOOL ".";
+        return false;
+    }
+    SDL_CreateDirectory(path("gamebuild").c_str());
+    SDL_CreateDirectory(path("build").c_str());
+    remove(path("gamebuild/progress.txt").c_str());
+    std::string root = path("targets"), out = path("gamebuild"), log = path("build/last_gamebuild.log");
+#ifdef _WIN32
+    std::string cmd = "\"" + tool + "\" --root \"" + root + "\" --out \"" + out + "\" --resources \"" + gc_dir() + "\"";
+    STARTUPINFOA si = {};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi2 = {};
+    SECURITY_ATTRIBUTES sa = {sizeof sa, NULL, TRUE};
+    HANDLE h = CreateFileA(log.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = si.hStdError = h;
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    }
+    std::vector<char> buf(cmd.begin(), cmd.end());
+    buf.push_back(0);
+    BOOL ok = CreateProcessA(tool.c_str(), buf.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, NULL,
+                             g_root.c_str(), &si, &pi2);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    if (!ok) { g_status = std::string(g.ui_lang ? "Could not start the game code build (error " : "No se pudo preparar el código del juego (error ") + std::to_string(GetLastError()) + ")"; return false; }
+    CloseHandle(pi2.hThread);
+    g_gc_proc = pi2.hProcess;
+#else
+    pid_t pid = spawn_logged({tool, "--root", root, "--out", out, "--resources", gc_dir()}, log, true);
+    if (!pid) { g_status = std::string(g.ui_lang ? "Could not start the game code build (" : "No se pudo preparar el código del juego (") + strerror(errno) + ")"; return false; }
+    g_gc_proc = pid;
+#endif
+    g_gc_then_play = then_play;
+    g_gc_frac = 0;
+    g_gc_text = g.ui_lang ? "Reading the game files..." : "Leyendo los archivos del juego...";
+    g_status = g.ui_lang ? "Preparing the game code from your game files (only once, a few minutes)" :
+                           "Preparando el código del juego desde tus archivos (solo una vez, unos minutos)";
+    return true;
+}
+static void gc_stop() {  // (closing the launcher: the builder keeps what it compiled and continues next time)
+    if (!gc_running()) return;
+#ifdef _WIN32
+    TerminateProcess(g_gc_proc, 1);
+    WaitForSingleObject(g_gc_proc, 2000);
+    CloseHandle(g_gc_proc);
+    g_gc_proc = NULL;
+#else
+    kill(-g_gc_proc, SIGTERM);
+    bool ended = false;
+    for (int i = 0; i < 20 && !ended; i++) { ended = waitpid(g_gc_proc, NULL, WNOHANG) == g_gc_proc; if (!ended) SDL_Delay(100); }
+    if (!ended) { kill(-g_gc_proc, SIGKILL); waitpid(g_gc_proc, NULL, 0); }
+    g_gc_proc = 0;
+#endif
+}
+static void gc_poll() {
+    if (!gc_running()) return;
+    static Uint64 last;
+    Uint64 now = SDL_GetTicks();
+    if (now - last < 250) return;
+    last = now;
+    FILE *f = fopen(path("gamebuild/progress.txt").c_str(), "r");
+    if (f) {
+        char phase[24] = "";
+        unsigned long long done = 0, total = 0;
+        if (fscanf(f, "%23s %llu %llu", phase, &done, &total) == 3 && total) {
+            int step = !strcmp(phase, "generate") ? 0 : !strcmp(phase, "compile") ? 1 : 2;
+            g_gc_frac = (step + (float)done / (float)total) / 3.0f;
+            char t[160];
+            if (step == 0) snprintf(t, sizeof t, g.ui_lang ? "Reading the game code: %llu of %llu" : "Leyendo el código del juego: %llu de %llu", done, total);
+            else if (step == 1) snprintf(t, sizeof t, g.ui_lang ? "Compiling the game code: %llu of %llu files" : "Compilando el código del juego: %llu de %llu archivos", done, total);
+            else snprintf(t, sizeof t, "%s", g.ui_lang ? "Linking the game code..." : "Enlazando el código del juego...");
+            g_gc_text = t;
+        }
+        fclose(f);
+    }
+#ifdef _WIN32
+    if (WaitForSingleObject(g_gc_proc, 0) != WAIT_OBJECT_0) return;
+    DWORD code = 1;
+    GetExitCodeProcess(g_gc_proc, &code);
+    CloseHandle(g_gc_proc);
+    g_gc_proc = NULL;
+#else
+    int st = 0;
+    if (waitpid(g_gc_proc, &st, WNOHANG) != g_gc_proc) return;
+    int code = WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+    g_gc_proc = 0;
+#endif
+    bool ok = code == 0 && gc_ready();
+    g_status = ok ? (g.ui_lang ? "Game code ready." : "Código del juego listo.") :
+                    (g.ui_lang ? "Preparing the game code failed (log: build/last_gamebuild.log)" :
+                                 "Falló la preparación del código del juego (registro: build/last_gamebuild.log)");
+    if (ok && g_gc_then_play) g_gc_play_now = true;
+}
+
+// ------------------------------------------------------------------ FSR 4 Lite model files
+// [XCDE] FSR 4 Lite replays AMD's Lite INT8 network; its model files are recorded on this PC from AMD's own upscaler
+// DLL (downloaded from AMD's GitHub) by the packaged monado-fsr4prep (tools/fsr4_prepare.py, bbport's capture tooling
+// in third_party/fsr4cap) and kept in fsr4/ here. Nothing of AMD's is shipped. Linux records through the player's
+// Proton; Windows natively on vkd3d-proton.
+#ifdef _WIN32
+static HANDLE g_fp_proc;
+#define FP_TOOL "monado-fsr4prep.exe"
+#else
+static pid_t g_fp_proc;
+#define FP_TOOL "monado-fsr4prep"
+#endif
+static float g_fp_frac;
+static std::string g_fp_text;
+static std::string fp_dir() {  // the packaged tool and capture tooling
+    const char *env = getenv("XCDE_FSR4PREP_DIR");  // (AppRun: inside the AppImage)
+    if (env && *env) return env;
+    return path("build/fsr4prep");
+}
+static bool fp_available() { SDL_PathInfo pi; return SDL_GetPathInfo((fp_dir() + "/" FP_TOOL).c_str(), &pi); }
+static bool fp_ready() {
+    SDL_PathInfo pi;
+    const char *env = getenv("MONADO_FSR4_ASSET_DIR");
+    if (env && *env && SDL_GetPathInfo((std::string(env) + "/lite/t1080_m0/initializer.bin").c_str(), &pi)) return true;
+    return SDL_GetPathInfo(path("fsr4/lite/t1080_m0/initializer.bin").c_str(), &pi) ||
+           SDL_GetPathInfo(path("build/fsr4/lite/t1080_m0/initializer.bin").c_str(), &pi);
+}
+static bool fp_running() {
+#ifdef _WIN32
+    return g_fp_proc != NULL;
+#else
+    return g_fp_proc != 0;
+#endif
+}
+static void fp_start() {
+    if (fp_running() || !fp_available()) return;
+    std::string tool = fp_dir() + "/" FP_TOOL, out = path("fsr4"), log = path("build/last_fsr4prep.log");
+    remove(path("fsr4-progress.txt").c_str());
+    SDL_CreateDirectory(path("build").c_str());  // (the log's folder: missing in a fresh data root)
+#ifdef _WIN32
+    std::string cmd = "\"" + tool + "\" --out \"" + out + "\" --tools \"" + fp_dir() + "\"";
+    STARTUPINFOA si = {};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi2 = {};
+    SECURITY_ATTRIBUTES sa = {sizeof sa, NULL, TRUE};
+    HANDLE h = CreateFileA(log.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = si.hStdError = h;
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    }
+    std::vector<char> buf(cmd.begin(), cmd.end());
+    buf.push_back(0);
+    BOOL ok = CreateProcessA(tool.c_str(), buf.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, g_root.c_str(), &si, &pi2);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    if (!ok) { g_status = std::string(g.ui_lang ? "Could not start the FSR 4 Lite preparation (error " : "No se pudo preparar FSR 4 Lite (error ") + std::to_string(GetLastError()) + ")"; return; }
+    CloseHandle(pi2.hThread);
+    g_fp_proc = pi2.hProcess;
+#else
+    pid_t pid = spawn_logged({tool, "--out", out, "--tools", fp_dir()}, log, true);
+    if (!pid) { g_status = std::string(g.ui_lang ? "Could not start the FSR 4 Lite preparation (" : "No se pudo preparar FSR 4 Lite (") + strerror(errno) + ")"; return; }
+    g_fp_proc = pid;
+#endif
+    g_fp_frac = 0;
+    g_fp_text = g.ui_lang ? "Downloading AMD's upscaler DLL..." : "Descargando la DLL de AMD...";
+    g_status = g.ui_lang ? "Preparing FSR 4 Lite on this PC (a few minutes, once)" : "Preparando FSR 4 Lite en este PC (unos minutos, una vez)";
+}
+static void fp_stop() {
+    if (!fp_running()) return;
+#ifdef _WIN32
+    TerminateProcess(g_fp_proc, 1);
+    WaitForSingleObject(g_fp_proc, 2000);
+    CloseHandle(g_fp_proc);
+    g_fp_proc = NULL;
+#else
+    kill(-g_fp_proc, SIGTERM);
+    bool ended = false;
+    for (int i = 0; i < 20 && !ended; i++) { ended = waitpid(g_fp_proc, NULL, WNOHANG) == g_fp_proc; if (!ended) SDL_Delay(100); }
+    if (!ended) { kill(-g_fp_proc, SIGKILL); waitpid(g_fp_proc, NULL, 0); }
+    g_fp_proc = 0;
+#endif
+}
+static void fp_poll() {
+    if (!fp_running()) return;
+    static Uint64 last;
+    Uint64 now = SDL_GetTicks();
+    if (now - last < 250) return;
+    last = now;
+    FILE *f = fopen(path("fsr4-progress.txt").c_str(), "r");
+    if (f) {
+        char phase[24] = "";
+        unsigned long long done = 0, total = 0;
+        if (fscanf(f, "%23s %llu %llu", phase, &done, &total) == 3 && total) {
+            char t[160];
+            if (!strcmp(phase, "download")) { g_fp_frac = 0.05f * done / total; snprintf(t, sizeof t, "%s", g.ui_lang ? "Downloading AMD's upscaler DLL..." : "Descargando la DLL de AMD..."); }
+            else if (!strcmp(phase, "record")) { g_fp_frac = 0.05f + 0.85f * done / total; snprintf(t, sizeof t, g.ui_lang ? "Recording FSR 4's passes: %llu of %llu" : "Grabando las pasadas de FSR 4: %llu de %llu", done, total); }
+            else { g_fp_frac = 0.95f; snprintf(t, sizeof t, "%s", g.ui_lang ? "Translating the shaders..." : "Traduciendo los shaders..."); }
+            g_fp_text = t;
+        }
+        fclose(f);
+    }
+#ifdef _WIN32
+    if (WaitForSingleObject(g_fp_proc, 0) != WAIT_OBJECT_0) return;
+    DWORD code = 1;
+    GetExitCodeProcess(g_fp_proc, &code);
+    CloseHandle(g_fp_proc);
+    g_fp_proc = NULL;
+#else
+    int st = 0;
+    if (waitpid(g_fp_proc, &st, WNOHANG) != g_fp_proc) return;
+    int code = WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+    g_fp_proc = 0;
+#endif
+    if (code == 0 && fp_ready()) g_status = g.ui_lang ? "FSR 4 Lite is ready." : "FSR 4 Lite está listo.";
+    else if (code == 3) g_status = g.ui_lang ? "FSR 4 Lite needs Proton (Steam's Proton or GE-Proton) to prepare its model files on Linux." :
+                                               "FSR 4 Lite necesita Proton (el de Steam o GE-Proton) para preparar sus modelos en Linux.";
+    else g_status = g.ui_lang ? "Preparing FSR 4 Lite failed (log: build/last_fsr4prep.log)" :
+                                "Falló la preparación de FSR 4 Lite (registro: build/last_fsr4prep.log)";
+}
+// (Graphics page, under the upscaler when FSR 4 Lite is chosen)
+static void fp_section() {
+    fp_poll();
+    if (fp_ready()) {
+        ImGui::TextDisabled("%s", g.ui_lang ? "FSR 4 Lite: model files ready." : "FSR 4 Lite: modelos listos.");
+        return;
+    }
+    if (fp_running()) {
+        ImGui::ProgressBar(g_fp_frac, ImVec2(-1, 0), g_fp_text.c_str());
+        return;
+    }
+    ImGui::TextWrapped("%s", g.ui_lang ?
+        "FSR 4 Lite needs its model files, made once on this PC from AMD's own upscaler DLL: it is downloaded from AMD's "
+        "GitHub (58 MB) and its passes are recorded on your GPU (a few minutes). On Linux this needs Proton installed "
+        "(Steam's Proton or GE-Proton). Until then FSR 1 is used." :
+        "FSR 4 Lite necesita sus modelos, hechos una vez en este PC a partir de la DLL de AMD: se descarga del GitHub de "
+        "AMD (58 MB) y sus pasadas se graban en tu GPU (unos minutos). En Linux hace falta Proton instalado (el de Steam "
+        "o GE-Proton). Mientras tanto se usa FSR 1.");
+    ImGui::BeginDisabled(!fp_available());
+    if (ImGui::Button(g.ui_lang ? "Prepare FSR 4 Lite" : "Preparar FSR 4 Lite")) fp_start();
+    ImGui::EndDisabled();
+    if (!fp_available()) ImGui::SetItemTooltip("%s", g.ui_lang ? "This build has no FSR 4 preparation tools (release packages bring them)." :
+                                                               "Este build no trae las herramientas de FSR 4 (los paquetes de release sí).");
+}
+
 // ------------------------------------------------------------------ remapping capture
 static int cap_dev = -1, cap_slot = -1;  // dev 0 keyboard, 1 controller, 2 keyboard (second key)
 static Uint64 cap_until, cap_since;
@@ -1190,12 +1484,7 @@ static void tab_graphics() {
     ImGui::TextDisabled(T("El juego original renderiza a 720p. Más resolución = imagen más nítida y más carga para la GPU."));
     const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal, cualquier GPU)",
                          "NVIDIA DLSS (temporal, GPU RTX)", "AMD FSR 4 Lite (temporal, nativo)"};
-#ifdef __linux__
-    const int nups = 5;  // [XCDE] T-FSR4-LITE: the native Linux component
-#else
-    const int nups = 4;
-    if (g.upscaler > 3) g.upscaler = 1;
-#endif
+    const int nups = 5;  // [XCDE] T-FSR4-LITE: the native component (Linux and Windows)
     ImGui::SetNextItemWidth(320 * g_scale);
     const char *up_preview = g.upscaler_auto ? (g.ui_lang ? "Automatic (DLSS on supported RTX)" : "Automático (DLSS en RTX compatible)") : T(ups[g.upscaler]);
     if (monado_begin_combo(T("Escalado / antialiasing"), up_preview)) {
@@ -1211,6 +1500,7 @@ static void tab_graphics() {
         ImGui::EndCombo();
     }
     if (!dlss_files) ImGui::TextDisabled(g.ui_lang ? "DLSS: official NVIDIA runtime not installed." : "DLSS: falta el paquete oficial NVIDIA.");
+    if (!g.upscaler_auto && g.upscaler == 4) fp_section();  // [XCDE] FSR 4 Lite's model files (prepared on this PC)
     else if (dlss_candidate) ImGui::TextDisabled(g.ui_lang ? "DLSS runtime installed; GPU/driver checked on launch." : "DLSS instalado; la GPU/controlador se comprueba al iniciar.");
     ImGui::SetItemTooltip(T("FSR 1.0: escalado espacial, solo cuando la resolución interna es menor que la ventana.\n"
                           "FSR 3.1 y DLSS: reconstrucción temporal - renderizan a menos resolución (según la calidad)\n"
@@ -1832,6 +2122,18 @@ int main(int argc, char **argv) {
                                                                    : T("Listo. La primera vez, JUGAR prepara los shaders antes (unos minutos)"))
                                                        : g_status.c_str());
         pc_poll();
+        gc_poll();
+        fp_poll();
+        // [XCDE] release packages: prepare the game code once, as soon as the game files are there
+        if (!shot && have_game && have_exe && !*g_mismatch_desc && !g_gc_auto && gc_available() && !gc_ready() &&
+            !gc_running() && !pc_running())
+            g_gc_auto = gc_start(false);
+        if (gc_running()) ImGui::ProgressBar(g_gc_frac, ImVec2(-1, 0), g_gc_text.c_str());
+        if (g_gc_play_now) {
+            g_gc_play_now = false;
+            if (!pc_done()) pc_start(true);
+            else { launch(); launched = g_launched_ok; if (launched) run = false; }
+        }
         if (pc_running()) {
             ImGui::ProgressBar(g_pc_frac, ImVec2(-150 * scale, 0), g_pc_text.c_str());
             ImGui::SameLine();
@@ -1847,18 +2149,19 @@ int main(int argc, char **argv) {
             launched = g_launched_ok;
             if (launched) run = false;
         }
-        ImGui::BeginDisabled(!have_game || !have_exe || launched || pc_running() || *g_mismatch_desc);
+        ImGui::BeginDisabled(!have_game || !have_exe || launched || pc_running() || gc_running() || *g_mismatch_desc);
         ImGui::PushStyleColor(ImGuiCol_Button, monado_crimson());
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.20f, 0.30f, 1));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.96f, 0.30f, 0.38f, 1));
         if (ImGui::Button(T("JUGAR"), ImVec2(200 * scale, 0))) {
-            if (!pc_done()) pc_start(true);
+            if (!gc_ready()) gc_start(true);
+            else if (!pc_done()) pc_start(true);
             else { launch(); launched = g_launched_ok; if (launched) run = false; }
         }
         ImGui::PopStyleColor(3);
         ImGui::EndDisabled();
         ImGui::SameLine();
-        ImGui::BeginDisabled(pc_running() || !have_exe || *g_mismatch_desc);
+        ImGui::BeginDisabled(pc_running() || gc_running() || !have_exe || *g_mismatch_desc);
         if (ImGui::Button(T("Precompilar shaders"))) pc_start(false);
         ImGui::SetItemTooltip("%s", g.ui_lang ? "Prepare every shader ahead of time, so new areas don't stop to compile them. Progress is kept."
                                               : "Prepara todos los shaders por adelantado, para que las zonas nuevas no se paren a compilarlos. El progreso se conserva.");
@@ -1894,7 +2197,7 @@ int main(int argc, char **argv) {
             SDL_Event wake; if (SDL_WaitEventTimeout(&wake,(SDL_GetWindowFlags(win)&SDL_WINDOW_MINIMIZED) ? 250 : 80)) SDL_PushEvent(&wake);
         }
     }
-    if (!launched) pc_stop();  // (closing the launcher stops a precompilation; what it wrote is kept)
+    if (!launched) { pc_stop(); gc_stop(); fp_stop(); }  // (closing the launcher stops a precompilation; what it wrote is kept)
     ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();

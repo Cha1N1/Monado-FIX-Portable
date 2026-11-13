@@ -1,0 +1,183 @@
+# Release packages for Linux and Windows, built in CI. They hold NO game code and NO game files (Constitution art. I):
+# the runtime is built with CMake -DMONADO_RELEASE=ON and the launcher builds the game code once, on the player's PC,
+# from their own dump (tools/gamebuild.py, frozen with PyInstaller and bundled with a trimmed zig). Every package tree
+# is checked with tools/package_guard.py before it is uploaded.
+#
+# Run it by hand (Actions > release > Run workflow) for test packages, or push a tag v* for a DRAFT GitHub release with
+# both packages attached: review it on the Releases page and publish it yourself.
+#
+# Upscalers: FSR 1 always; FSR 3 (Linux: native component built from AMD's SDK source; Windows: AMD's signed DLL from
+# the official FidelityFX SDK 1.1.4 release); DLSS on Windows (NVIDIA's official Streamline release,
+# tools/install_dlss.py, hash-pinned); FSR 4 Lite on both. FSR 4 Lite's model files are NOT packaged (they are
+# derived from AMD's SDK): the packages carry the preparation tool (tools/build_fsr4prep.py) and the launcher's
+# "Prepare FSR 4 Lite" makes them once on the player's PC from AMD's own download.
+name: release
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+env:
+  ZIG_VERSION: '0.17.1'
+  SDL_TAG: release-3.4.8
+  APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+  APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+  FFX_URL: https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/v1.1.4/FidelityFX-SDK-v1.1.4.zip
+  FFX_SHA256: 0216556bfb0e243cec30004a2a98d38f4e3f7406cb7938e3c1b85c758e95d952   # (AMD publishes no digest: measured once)
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04   # (glibc 2.39: the AppImage then runs on current and older distributions alike)
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build tools and libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-19 lld-19 ninja-build cmake pkg-config git glslang-tools \
+            libvulkan-dev libshaderc-dev libopus-dev zlib1g-dev libavcodec-dev libavformat-dev libavutil-dev \
+            libswscale-dev libswresample-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
+            libxfixes-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols libdecor-0-dev libegl-dev \
+            libpulse-dev libasound2-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libusb-1.0-0-dev libfuse2t64 file
+      - name: SDL3 (not packaged by Ubuntu 24.04; the same version as the Windows build)
+        run: |
+          git clone --depth 1 --branch "$SDL_TAG" https://github.com/libsdl-org/SDL.git /tmp/SDL
+          cmake -S /tmp/SDL -B /tmp/SDL/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF \
+                -DCMAKE_INSTALL_PREFIX=/usr/local
+          cmake --build /tmp/SDL/build
+          sudo cmake --install /tmp/SDL/build
+          sudo ldconfig
+      - name: Vulkan headers (Ubuntu 24.04's 1.3.275 lack extensions the renderer uses)
+        run: |
+          git clone --depth 1 --branch v1.4.366 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vkh
+          cmake -S /tmp/vkh -B /tmp/vkh/build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr/local
+          sudo cmake --install /tmp/vkh/build
+      - name: Vulkan Memory Allocator header
+        run: |
+          mkdir -p build/deps
+          curl -fsSL -o build/deps/vk_mem_alloc.h \
+            https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/v3.3.0/include/vk_mem_alloc.h
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python tools (recompiler, zig, PyInstaller)
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -q "ziglang==$ZIG_VERSION" capstone==5.0.9 unicorn==2.1.4 lz4==4.4.5 pyinstaller
+      - name: Stage the first-start builder
+        run: .venv/bin/python tools/gamebuild_stage.py --dest build/gamebuild --platform linux
+      - name: Build the release runtime, launcher and upscaler components
+        env:
+          VMA_INCLUDE_DIR: ${{ github.workspace }}/build/deps
+          PYTHON: .venv/bin/python
+          CC: clang-19
+          CXX: clang++-19
+        run: |
+          # clang 19+: runtime/platform/linux.c checks __builtin_cpu_supports("cx16")
+          cmake --preset linux -B build/cmake/release -DMONADO_RELEASE=ON -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19
+          cmake --build build/cmake/release
+          test -f build/linux/libmonado_fsr3.so || { echo "::error::native FSR 3 was not built"; exit 1; }
+          test -f build/linux/libmonado_fsr4.so || { echo "::error::native FSR 4 Lite was not built"; exit 1; }
+      - name: Freeze the builder
+        run: .venv/bin/python tools/freeze_gamebuild.py --python .venv/bin/python
+      - name: FSR 4 Lite preparation tool
+        run: .venv/bin/python tools/build_fsr4prep.py
+      - name: appimagetool (pinned)
+        run: |
+          curl -fsSL -o /tmp/appimagetool "$APPIMAGETOOL_URL"
+          echo "$APPIMAGETOOL_SHA256  /tmp/appimagetool" | sha256sum -c -
+          chmod +x /tmp/appimagetool
+      - name: Package the AppImage (checked with tools/package_guard.py)
+        run: |
+          python3 tools/make_appimage.py --release --appimagetool /tmp/appimagetool --output dist/Monado-x86_64.AppImage
+          (cd dist && sha256sum Monado-x86_64.AppImage > Monado-x86_64.AppImage.sha256)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: monado-linux
+          path: dist/
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2   # the runner's own MSYS2 in C:\msys64, where the build expects the UCRT64 libraries
+        with:
+          msystem: UCRT64
+          release: false
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-sdl3 mingw-w64-ucrt-x86_64-ffmpeg mingw-w64-ucrt-x86_64-vulkan-devel
+            mingw-w64-ucrt-x86_64-shaderc mingw-w64-ucrt-x86_64-vulkan-memory-allocator mingw-w64-ucrt-x86_64-opus
+            mingw-w64-ucrt-x86_64-zlib mingw-w64-ucrt-x86_64-gcc
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python tools (recompiler, zig, CMake, Ninja, PyInstaller)
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python -m pip install -q "ziglang==$env:ZIG_VERSION" capstone==5.0.9 unicorn==2.1.4 lz4==4.4.5 cmake ninja pyinstaller zstandard
+      - name: AMD FSR 3 runtime (official FidelityFX SDK 1.1.4) and NVIDIA DLSS (official Streamline, hash-pinned)
+        run: |
+          Invoke-WebRequest -Uri $env:FFX_URL -OutFile ffx.zip
+          $hash = (Get-FileHash ffx.zip -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:FFX_SHA256) { throw "FidelityFX SDK zip: sha256 $hash, expected $env:FFX_SHA256" }
+          $dll = (tar -tf ffx.zip | Select-String 'PrebuiltSignedDLL/amd_fidelityfx_vk.dll$' | Select-Object -First 1).ToString()
+          tar -xf ffx.zip $dll
+          New-Item -ItemType Directory -Force build | Out-Null
+          Copy-Item $dll build/amd_fidelityfx_vk.dll
+          $sig = Get-AuthenticodeSignature build/amd_fidelityfx_vk.dll
+          "amd_fidelityfx_vk.dll signature: $($sig.Status) ($($sig.SignerCertificate.Subject))"
+          if ($sig.Status -ne 'Valid') { throw 'amd_fidelityfx_vk.dll is not validly signed' }
+          Remove-Item ffx.zip
+          .venv\Scripts\python tools/install_dlss.py
+      - name: Stage the first-start builder (with the executable's import library)
+        run: .venv\Scripts\python tools/gamebuild_stage.py --dest build/gamebuild --platform windows --link-file xcde_imports.a
+      - name: Build the release runtime, launcher and FSR 4 Lite component
+        run: |
+          $env:PATH = "$PWD\.venv\Scripts;C:\msys64\ucrt64\bin;$env:PATH"
+          cmake --preset windows -B build/cmake/release -DMONADO_RELEASE=ON
+          cmake --build build/cmake/release
+          foreach ($f in 'build/xcde.exe', 'build/xcde_launcher.exe', 'build/monado_fsr4.dll', 'build/gamebuild/xcde_imports.a') {
+            if (-not (Test-Path $f)) { throw "missing $f" }
+          }
+      - name: Freeze the builder
+        run: .venv\Scripts\python tools/freeze_gamebuild.py --python .venv\Scripts\python.exe
+      - name: FSR 4 Lite preparation tool
+        run: |
+          $env:PATH = "$PWD\.venv\Scripts;C:\msys64\ucrt64\bin;$env:PATH"
+          .venv\Scripts\python tools/build_fsr4prep.py
+      - name: Package the ZIP (checked with tools/package_guard.py)
+        run: |
+          .venv\Scripts\python tools/make_portable.py "$env:RUNNER_TEMP\Monado-Windows" --release --msys C:\msys64\ucrt64\bin
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path "$env:RUNNER_TEMP\Monado-Windows\*" -DestinationPath dist/Monado-Windows-x64.zip
+          (Get-FileHash dist/Monado-Windows-x64.zip -Algorithm SHA256).Hash.ToLower() + "  Monado-Windows-x64.zip" |
+            Out-File -Encoding ascii dist/Monado-Windows-x64.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: monado-windows
+          path: dist/
+          if-no-files-found: error
+
+  draft-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Draft release (review and publish it on the Releases page)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --title "$GITHUB_REF_NAME" \
+            --notes "Built by the release workflow from ${GITHUB_SHA::7}. No game code or game files: the launcher builds the game code once from your own dump (Xenoblade Chronicles: Definitive Edition 2.0.0)." \
+            dist/*

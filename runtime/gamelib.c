@@ -35,7 +35,7 @@ static bool exists(const char *p) {
 }
 
 // The places to look, in order (gamelib.h). Returns how many were filled.
-static int candidates(const char *game_dir, char out[3][1100]) {
+static int candidates(const char *game_dir, char out[5][1100]) {
     int n = 0;
     const char *env = getenv("LARECOMP_GAME_LIB");
     if (env && *env) snprintf(out[n++], 1100, "%s", env);
@@ -43,12 +43,17 @@ static int candidates(const char *game_dir, char out[3][1100]) {
     if (rt_resource(GAMELIB_NAME, NULL, exe_side, sizeof exe_side) && exists(exe_side))
         snprintf(out[n++], 1100, "%s", exe_side);
     if (game_dir) snprintf(out[n++], 1100, "%s/%s", game_dir, GAMELIB_NAME);
+    // Release packages build it once into the writable data folder (tools/gamebuild.py). That is also the working
+    // directory the launcher and AppRun enter; rt_data_root() is empty here (rt_paths_init has no caller).
+    const char *data = getenv("LARECOMP_DATA_ROOT");
+    if (data && *data) snprintf(out[n++], 1100, "%s/gamebuild/%s", data, GAMELIB_NAME);
+    snprintf(out[n++], 1100, "gamebuild/%s", GAMELIB_NAME);
     return n;
 }
 
 bool gamelib_present(const char *game_dir) {
     if (g_tables) return true;
-    char c[3][1100];
+    char c[5][1100];
     int n = candidates(game_dir, c);
     for (int i = 0; i < n; i++)
         if (exists(c[i]) && id_matches(c[i])) return true;
@@ -78,8 +83,12 @@ bool gamelib_load(const char *game_dir, char *why, size_t why_size) {
     static bool tried;
     if (!tried) {
         tried = true;
-        snprintf(g_error, sizeof g_error, "the game code hasn't been built: set up the game files on the start screen");
-        char c[3][1100];
+        const char *data = getenv("LARECOMP_DATA_ROOT");
+        snprintf(g_error, sizeof g_error,
+                 "the game code hasn't been built in %s/gamebuild/%s: start the launcher once so it prepares it from "
+                 "your game files",
+                 data && *data ? data : ".", GAMELIB_NAME);
+        char c[5][1100];
         int n = candidates(game_dir, c);
         const char *env = getenv("LARECOMP_GAME_LIB");
         for (int i = 0; i < n && !g_tables; i++) {
