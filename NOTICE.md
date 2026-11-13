@@ -29,7 +29,7 @@ Every edit to a copied file is marked `[XCDE]` (the project's working name) and 
 | SMAA (reference shader and lookup textures) | MIT-style (`third_party/smaa/LICENSE.txt`) |
 | AMD FidelityFX API headers (FSR 3.1 / frame generation) | MIT |
 | NVIDIA Streamline headers (DLSS) | MIT (`third_party/streamline/license.txt`) |
-| weeping-of-the-empire (daniel-madrid-07, fe2345e8) | MIT (`third_party/weeping-of-the-empire/LICENSE`); its visibility-scoped feedback copies are the design reference for `resolve_feedback` (no code copied) |
+| weeping-of-the-empire (daniel-madrid-07, fe2345e8) | MIT (`third_party/weeping-of-the-empire/LICENSE`); the Linux AMDGPU GTT / dma-buf guest heap is adapted in `runtime/platform/linux_gpu.h` and the Vulkan import in `runtime/nvn/vulkan/exec.c`; its visibility-scoped feedback copies are the design reference for `resolve_feedback` (no code copied) |
 | bcdec (BC texture decoding) | MIT or public domain (Unlicense), at the user's choice |
 
 ## Linked at build time (not in this repository)

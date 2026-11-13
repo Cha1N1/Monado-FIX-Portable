@@ -23,10 +23,13 @@
 
 #include "../platform.h"
 #include "../rt.h"  // [XCDE] T-LINUX: guest bounds for memory accounting.
+#include "linux_gpu.h"  // [XCDE] T-LINUX-GTT
 
 #ifndef MAP_FIXED_NOREPLACE
 #define MAP_FIXED_NOREPLACE 0x100000
 #endif
+
+static bool guest_heap_reserved;  // [XCDE] T-LINUX-GTT
 
 // ---- guest address space
 // Everything readable/writable from the start, like macOS: the guest maps at 4K granularity, and untouched pages
@@ -36,11 +39,29 @@ bool plat_reserve_guest(uint64_t lo, uint64_t hi) {
                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
     if (p == MAP_FAILED) return false;
     if (p != (void *)(uintptr_t)lo) { munmap(p, hi - lo); return false; }  // (kernels before 4.17: just a hint)
+    guest_heap_reserved = lo <= HEAP_BASE && hi >= HEAP_BASE + HEAP_MAX;
     return true;
+}
+
+int plat_gpu_heap_fd(uint64_t address, uint64_t size, uint64_t *allocation_size) {
+    if (gpu_heap_fd < 0 || address != gpu_heap_base || size > gpu_heap_size) return -1;
+    *allocation_size = gpu_heap_size;
+    return gpu_heap_fd;
 }
 
 // Fresh zero pages over the whole window (the old ones are released at once).
 bool plat_reset_guest(uint64_t lo, uint64_t hi) {
+    // [XCDE] T-LINUX-GTT: keep the driver-owned heap (and its Vulkan import) across a guest reset; zero it instead.
+    // The caller has stopped guest and GPU work.
+    if (gpu_heap_fd >= 0 && lo <= gpu_heap_base && hi >= gpu_heap_base + gpu_heap_size) {
+        if (lo < gpu_heap_base && mmap((void *)(uintptr_t)lo, gpu_heap_base - lo, PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0) != (void *)(uintptr_t)lo) return false;
+        uint64_t end = gpu_heap_base + gpu_heap_size;
+        if (hi > end && mmap((void *)(uintptr_t)end, hi - end, PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0) != (void *)(uintptr_t)end) return false;
+        memset((void *)gpu_heap_base, 0, gpu_heap_size);
+        return true;
+    }
     return mmap((void *)(uintptr_t)lo, hi - lo, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED,
                 -1, 0) == (void *)(uintptr_t)lo;
 }
@@ -122,6 +143,8 @@ static void require_cpu(void) {}
 void plat_init(void) {
     log_to_file_without_terminal();
     require_cpu();
+    // [XCDE] T-LINUX-GTT: before any guest code runs or writes the heap (XCDE_GPU_BO=0: off)
+    if (guest_heap_reserved && gpu_heap_fd < 0) linux_gpu_heap_map((void *)(uintptr_t)HEAP_BASE, HEAP_MAX);
 }
 
 // (inside an AppImage: the binary in its mount, which stays mounted while this process lives - re-exec included)
