@@ -471,8 +471,24 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
         io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
         font_h = fmaxf(16.0f, h / 1080.0f * 22.0f);
-        if (!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", font_h, nullptr, io.Fonts->GetGlyphRangesDefault()))
-            io.Fonts->AddFontDefault();
+        {   // [XCDE] the first installed one of these; ImGui asserts (aborts) on a missing font file, so check first.
+            // The Windows path alone made every Linux start abort on its first frame with the FPS counter on.
+#ifdef _WIN32
+            static const char *fonts[] = {"C:\\Windows\\Fonts\\segoeui.ttf"};
+#else
+            static const char *fonts[] = {"/usr/share/fonts/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+                                          "/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                                          "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"};
+#endif
+            ImFont *font = nullptr;
+            for (const char *f : fonts) {
+                FILE *probe = fopen(f, "rb");
+                if (!probe) continue;
+                fclose(probe);
+                if ((font = io.Fonts->AddFontFromFileTTF(f, font_h, nullptr, io.Fonts->GetGlyphRangesDefault()))) break;
+            }
+            if (!font) io.Fonts->AddFontDefault();
+        }
         monado_theme(font_h / 16.0f);
         if (!vk_imgui_backend_init()) { ImGui::DestroyContext(ctx); ctx = nullptr; open_ = false; return; }
         ImGui_ImplVulkan_CreateFontsTexture();
