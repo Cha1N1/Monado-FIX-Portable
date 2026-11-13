@@ -5158,6 +5158,19 @@ static void xsh_stored(int stage) {
     }
 }
 
+// [XCDE] T-STG-WRITERS: would xsh_stored(stage) act for the current storage-buffer bindings? Only when one of them
+// overlaps a mirror or holds an address noted as an in-place read of GPU-written data (otherwise it skips them all).
+static bool xsh_stage_relevant(int stage) {
+    if (!xsh_store_on() || !nwant) return false;
+    for (int i = 0; i < 16; i++) {
+        uint64_t a = st.sbuf[stage][i].addr, sz = st.sbuf[stage][i].size;
+        if (a < HEAP_BASE || !sz || sz > (1ull << 20)) continue;
+        for (int k = 0; k < nxsh; k++) if (xsh[k].base < a + sz && a < xsh[k].base + xsh[k].size) return true;
+        for (int k = 0; k < nwant; k++) if (xsh_want[k] >= a && xsh_want[k] < a + sz) return true;
+    }
+    return false;
+}
+
 static uint64_t g_direct_limit;  // (T175) bytes the buffer guest_direct returned holds from its offset (~0: the rest of it)
 static bool guest_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off) {
     static int copy = -1;
@@ -6009,9 +6022,26 @@ static void draw_(CmdRec *r, bool indexed) {
     if (xfb || pr->vi->uses_gmem_store) wst |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
     if (pr->fi->uses_gmem_store) wst |= VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
     if (pr->gi && pr->gi->uses_gmem_store) wst |= VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT;
+    // [XCDE] T-STG-WRITERS: a draw whose only memory writes are vertex-shader stores (no transform-feedback emulation,
+    // no fragment/geometry stores) follows NVN's contract: shader stores are unordered against later draws unless the
+    // game calls nvnCommandBufferBarrier, and the game does (0x1 before a mesh's skinning writers, 0x21 after). A census
+    // of the opening battle found such writers never load global memory and consecutive ones write disjoint buffers,
+    // so back-to-back writers share a pass with no barrier between them. T136's rule stays for transform feedback
+    // (ordered in hardware on Maxwell, so the game issues no barrier there), for any non-writer draw that follows (it
+    // restarts behind the barrier as before), and for writers whose storage buffers a T197 store mirror covers or wants.
+    // XCDE_STG_WRITER_PASS=0: the previous behaviour (a pass break and barrier around every writer).
+    static int stg_on = -1;
+    if (stg_on < 0) { const char *e = getenv("XCDE_STG_WRITER_PASS"); stg_on = !(e && atoi(e) == 0); }
+    static bool stg_tail;        // the previous draw was such a writer and left its pass open
+    static uint64_t stg_tail_seq;
+    bool stg_writer = stg_on && !xfb && wst == VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT && !xsh_stage_relevant(0);
+    bool stg_follow = stg_tail && in_pass && !st.rt_dirty && stg_tail_seq == pass_seq_no;
+    stg_tail = false;
     if (wst) {
-        if (in_pass) st.rt_dirty = true;
+        if (in_pass && !(stg_writer && stg_follow)) st.rt_dirty = true;
         pre_wr |= wst;  // (the barrier before it: earlier reads of guest memory first, T136)
+    } else if (stg_follow) {
+        st.rt_dirty = true;  // (a draw after the open writer pass: behind a barrier, as before)
     }
     static int simg_full = -1;  // XCDE_SIMG_FULL=1: storage images untracked (full barriers around their passes, as before)
     if (simg_full < 0) simg_full = getenv("XCDE_SIMG_FULL") != NULL;
@@ -6605,7 +6635,10 @@ static void draw_(CmdRec *r, bool indexed) {
     // the next draws' vertex fetch; the game issues no barrier in between (Maxwell runs them in order), and Vulkan gives
     // no ordering inside a render pass. Without it the depth prepass drew grass from a half-written vertex buffer, the
     // G-buffer grass then failed its EQUAL depth test: black grass. The next draw starts a new pass behind a full barrier.
-    if (pr->vi->uses_gmem_store || pr->fi->uses_gmem_store || (pr->gi && pr->gi->uses_gmem_store)) {
+    if (stg_writer && !xsh_stage_relevant(0) && in_pass) {  // [XCDE] T-STG-WRITERS: keep the pass open for a following writer
+        stg_tail = true;
+        stg_tail_seq = pass_seq_no;
+    } else if (pr->vi->uses_gmem_store || pr->fi->uses_gmem_store || (pr->gi && pr->gi->uses_gmem_store)) {
         vk_end_pass(); st.rt_dirty = true; pass_untracked = !(mem_track_mode() & 1);
         if (nwant) { if (pr->vi->uses_gmem_store) xsh_stored(0); if (pr->fi->uses_gmem_store) xsh_stored(1); }  // (T197)
     }
