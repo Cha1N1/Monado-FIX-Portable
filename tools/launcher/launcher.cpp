@@ -123,6 +123,7 @@ struct Cfg {
     int win = 0;            // index into k_wins
     int res = 0;            // index into k_res
     int upscaler = 1;       // 0 bilinear, 1 FSR 1, 2 FSR 3.1, 3 DLSS
+    float sharpness = -1.0f;  // [XCDE] RCAS strength 0..1; < 0: each upscaler's default (xcde.ini upscale_sharpness)
     int uquality = 1;       // FSR 3 / DLSS: 0 native AA, 1 quality, 2 balanced, 3 performance, 4 ultra performance
     bool frame_gen = false;
     bool smaa = false;
@@ -449,6 +450,10 @@ static void load() {
         else if (!strcmp(k, "resolution") && (i = find(k_res_ini, 7, v)) >= 0) g.res = i;
         else if (!strcmp(k, "upscaler")) { g.upscaler_auto = !strcmp(v, "auto"); g.upscaler = !strcmp(v, "fsr") || g.upscaler_auto ? 1 : !strcmp(v, "fsr3") ? 2 : !strcmp(v, "dlss") ? 3 : !strcmp(v, "fsr4lite") ? 4 : 0; }
         else if (!strcmp(k, "upscale_quality") && (i = find(k_uq_ini, 5, v)) >= 0) g.uquality = i;
+        else if (!strcmp(k, "upscale_sharpness")) {
+            float x = strcmp(v, "default") ? (float)atof(v) : -1.0f;
+            g.sharpness = x < 0.0f ? -1.0f : x > 1.0f ? 1.0f : x;
+        }
         else if (!strcmp(k, "frame_gen")) g.frame_gen = atoi(v) != 0;
         else if (!strcmp(k, "antialias")) g.smaa = !strcmp(v, "smaa");
         else if (!strcmp(k, "depth_of_field")) g.dof = atoi(v) != 0;
@@ -519,6 +524,8 @@ static bool save() {
     fprintf(f, "aspect = %s\n", g.aspect == ASPECT_ORIGINAL ? "original" : "auto");
     fprintf(f, "vulkan_api = %s\nfps_overlay = %d\n", g.vulkan_api == 12 ? "1.2" : g.vulkan_api == 13 ? "1.3" : g.vulkan_api == 14 ? "1.4" : "auto", g.fps_overlay);
     fprintf(f, "upscale_quality = %s\nframe_gen = %d\n", k_uq_ini[g.uquality], g.frame_gen);
+    if (g.sharpness < 0.0f) fprintf(f, "upscale_sharpness = default\n");
+    else fprintf(f, "upscale_sharpness = %.3f\n", g.sharpness);
     fprintf(f, "depth_of_field = %d\n", g.dof);
     fprintf(f, "game_blur = %d\n", g.game_blur);
     fprintf(f, "taa = %d\n", g.taa);
@@ -999,6 +1006,17 @@ static void tab_graphics() {
                           "y reconstruyen la imagen de la ventana con varios frames: más FPS y bordes sin dientes.\n"
                           "Sustituyen al antialiasing temporal del juego. DLSS necesita una GPU NVIDIA RTX; si no\n"
                           "está disponible se usa FSR 3.1."));
+    if (g.upscaler == 1 || g.upscaler == 2) {  // [XCDE] RCAS strength (FSR 1 / FSR 3), also live in F1
+        float sharp = g.sharpness >= 0.0f ? g.sharpness : g.upscaler == 1 ? 0.9f : 0.3f;
+        ImGui::SetNextItemWidth(320 * g_scale);
+        if (ImGui::SliderFloat(g.ui_lang ? "Sharpening (RCAS)" : "Nitidez (RCAS)", &sharp, 0.0f, 1.0f, "%.2f")) g.sharpness = sharp;
+        ImGui::SetItemTooltip("%s", g.ui_lang ? "0 = off, 1 = maximum. Default: FSR 1 0.90, FSR 3 0.30 (as before)."
+                                              : "0 = desactivada, 1 = máxima. Predeterminada: FSR 1 0,90, FSR 3 0,30 (como antes).");
+        if (g.sharpness >= 0.0f) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton(g.ui_lang ? "Default" : "Predeterminada")) g.sharpness = -1.0f;
+        }
+    }
     if (g.upscaler >= 2 || (g.upscaler_auto && dlss_candidate)) {
         const char *uq[] = {"Nativo (solo antialiasing: DLAA / FSR Native AA)", "Calidad (67 %)", "Equilibrado (59 %)",
                             "Rendimiento (50 %)", "Ultra rendimiento (33 %)"};

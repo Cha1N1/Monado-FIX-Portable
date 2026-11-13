@@ -260,6 +260,16 @@ static void ui(void) {
                 }
                 ImGui::EndCombo();
             }
+            if (g_settings.upscaler == UPSCALE_FSR1 || g_settings.upscaler == UPSCALE_FSR3) {  // [XCDE] RCAS strength, live
+                float sharp = xcde_sharpness(&g_settings);
+                if (ImGui::SliderFloat(g_settings.ui_lang ? "Sharpening (RCAS)" : "Nitidez (RCAS)", &sharp, 0.0f, 1.0f, "%.2f"))
+                    g_settings.upscale_sharpness = sharp;
+                ImGui::SetItemTooltip("%s", g_settings.ui_lang ? "0 = off, 1 = maximum. Applies at once." : "0 = desactivada, 1 = máxima. Se aplica al instante.");
+                if (g_settings.upscale_sharpness >= 0.0f) {
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton(g_settings.ui_lang ? "Default" : "Predeterminada")) g_settings.upscale_sharpness = -1.0f;
+                }
+            }
             if (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS || g_settings.upscaler == UPSCALE_FSR4_LITE) {
                 static const char *uq[] = {"Nativo (solo antialiasing)", "Calidad (67 %)", "Equilibrado (59 %)", "Rendimiento (50 %)",
                                            "Ultra rendimiento (33 %)"};

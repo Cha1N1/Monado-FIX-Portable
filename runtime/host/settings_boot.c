@@ -7,7 +7,7 @@ const char *const g_language_codes[N_LANGUAGES] = {"", "ja", "en-US", "fr", "de"
 const char *const g_language_names[N_LANGUAGES] = {"Auto", "Japanese", "English", "French", "German", "Italian", "Spanish",
                                                    "Chinese", "Korean", "Dutch", "Portuguese", "Russian",
                                                    "Chinese (Simplified)", "Chinese (Traditional)"};
-Settings g_settings = {.fps_overlay = true, .upscaler_auto = true, .volume = 1.0f, .movie_audio = true, .gpu_index = -1, .gpu_profile = GPU_PROFILE_AUTO,
+Settings g_settings = {.fps_overlay = true, .upscaler_auto = true, .upscale_sharpness = -1.0f, .volume = 1.0f, .movie_audio = true, .gpu_index = -1, .gpu_profile = GPU_PROFILE_AUTO,
                        .gpu_gpl = GPU_GPL_AUTO, .occlusion = OCCL_AUTO, .amd_fix = AMD_FIX_AUTO, .session_fix = SESSION_FIX_AUTO, .gpu_memory_budget = true, .input_rumble = true, .grass_lod = GRASS_DEFAULT};
 
 void settings_load(void) { xcde_foliage_configure(g_settings.grass_lod); }

@@ -754,8 +754,8 @@ VkImageView tmp_upscale(VkCommandBuffer cb, TexBackend *color, VkImageView color
         d.motionVectorScale.y = (float)rh;
         d.renderSize.width = rw; d.renderSize.height = rh;
         d.upscaleSize.width = ow; d.upscaleSize.height = oh;
-        d.enableSharpening = true;
-        d.sharpness = 0.3f;
+        d.sharpness = xcde_sharpness(&g_settings);  // [XCDE] RCAS strength (default 0.3, as before); 0 = off
+        d.enableSharpening = d.sharpness > 0.0f;
         d.frameTimeDelta = dt;
         d.preExposure = 1.0f;
         d.reset = reset;
