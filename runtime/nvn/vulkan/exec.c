@@ -17,6 +17,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifdef __linux__
+#include <unistd.h>  // [XCDE] T-LINUX-GTT: dup/close of the dma-buf fd
+#endif
 
 #include "../../kernel.h"
 #include "shaders.h"
@@ -4387,7 +4390,60 @@ void vk_gmem_check(uint64_t frame) {
         (unsigned long long)pages, (unsigned long long)first);
 }
 
+// [XCDE] T-LINUX-GTT: scheme adapted from weeping-of-the-empire, fe2345e8,
+// MIT (daniel-madrid-07); see third_party/weeping-of-the-empire/LICENSE.
+#ifdef __linux__
+static bool gmem_import_dma(uint64_t size) {
+    uint64_t full_size = 0;
+    int source_fd = plat_gpu_heap_fd(HEAP_BASE, size, &full_size);
+    if (source_fd < 0) return false;
+    if (!g_vk.dmabuf_import) FATAL("driver-owned heap requires dma-buf Vulkan support; retry with XCDE_GPU_BO=0\n");
+    PFN_vkGetMemoryFdPropertiesKHR get_properties =
+        (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(g_vk.dev, "vkGetMemoryFdPropertiesKHR");
+    VkMemoryFdPropertiesKHR properties = {.sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
+    if (!get_properties || get_properties(g_vk.dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, source_fd, &properties) != VK_SUCCESS)
+        FATAL("dma-buf properties failed; retry with XCDE_GPU_BO=0\n");
+    VkExternalMemoryBufferCreateInfo external = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+    VkBufferCreateInfo buffer_info = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &external, .size = full_size,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
+    VkBuffer buffer;
+    VK_CHECK(vkCreateBuffer(g_vk.dev, &buffer_info, NULL, &buffer));
+    VkMemoryRequirements requirements;
+    vkGetBufferMemoryRequirements(g_vk.dev, buffer, &requirements);
+    uint32_t types = properties.memoryTypeBits & requirements.memoryTypeBits;
+    if (!types || requirements.size > full_size) FATAL("dma-buf heap does not satisfy Vulkan buffer requirements; retry with XCDE_GPU_BO=0\n");
+    int fd = dup(source_fd);
+    if (fd < 0) FATAL("could not duplicate dma-buf fd\n");
+    VkImportMemoryFdInfoKHR imported = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, .fd = fd};
+    VkMemoryDedicatedAllocateInfo dedicated = {.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+        .pNext = &imported, .buffer = buffer};
+    VkMemoryAllocateInfo allocation = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &dedicated,
+        .allocationSize = full_size, .memoryTypeIndex = (uint32_t)__builtin_ctz(types)};
+    VkDeviceMemory memory;
+    VkResult result = vkAllocateMemory(g_vk.dev, &allocation, NULL, &memory);
+    if (result != VK_SUCCESS) {
+        close(fd);  // a successful Vulkan import owns its duplicate; a failed one does not
+        vkDestroyBuffer(g_vk.dev, buffer, NULL);
+        FATAL("dma-buf allocation failed (%d); retry with XCDE_GPU_BO=0\n", result);
+    }
+    VK_CHECK(vkBindBufferMemory(g_vk.dev, buffer, memory, 0));
+    if (gmem_buf) vk_defer_import(gmem_buf, gmem_mem);  // (T254: submitted work may still use the old one)
+    gmem_buf = buffer;
+    gmem_mem = memory;
+    gmem_size = full_size;
+    LOG("[vk] guest heap imported by dma-buf: %llu MiB, driver-owned GTT, memory type %u\n",
+        (unsigned long long)(full_size >> 20), allocation.memoryTypeIndex);
+    return true;
+}
+#endif
+
 static bool gmem_import(uint64_t size) {
+#ifdef __linux__
+    if (gmem_import_dma(size)) return true;
+#endif
     PFN_vkGetMemoryHostPointerPropertiesEXT props =
         (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(g_vk.dev, "vkGetMemoryHostPointerPropertiesEXT");
     VkMemoryHostPointerPropertiesEXT mp = {.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
@@ -4439,7 +4495,7 @@ static uint64_t gmem_tried;  // heap size the import was last attempted for (gme
 
 static VkDescriptorBufferInfo gmem_info(void) {
     static int off = -1;
-    if (off < 0) off = getenv("LARECOMP_VK_NO_GMEM") != NULL || !g_vk.host_import;
+    if (off < 0) off = getenv("LARECOMP_VK_NO_GMEM") != NULL || (!g_vk.host_import && !g_vk.dmabuf_import);  // [XCDE] T-LINUX-GTT
     uint64_t want = (kernel_heap_size() + 0xFFFF) & ~0xFFFFull;
     if (want > HEAP_MAX) want = HEAP_MAX;
     if (!off && want > gmem_size && !gmem_import(want)) {

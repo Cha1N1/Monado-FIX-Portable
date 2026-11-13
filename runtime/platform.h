@@ -34,6 +34,11 @@ enum { PLAT_PROT_NONE = 0, PLAT_PROT_READ = 1, PLAT_PROT_RW = 3 };
 int plat_protect(uint64_t addr, uint64_t size, int prot);  // 0 on success
 #define PLAT_PAGE 0x4000ull  // largest page size we deal with (macOS 16K; multiple of Windows' 4K)
 
+#ifdef __linux__
+// [XCDE] T-LINUX-GTT: the dma-buf of a driver-owned guest heap (borrowed: the caller duplicates it), -1 if none.
+int plat_gpu_heap_fd(uint64_t address, uint64_t size, uint64_t *allocation_size);
+#endif
+
 // ---- time
 uint64_t plat_now_ns(void);                // monotonic
 void plat_sleep_until_ns(uint64_t t);      // precise wait for plat_now_ns() >= t
