@@ -191,7 +191,7 @@ static void fg_frame(VkCommandBuffer cb, bool enabled, const TmpCamera *cam, con
         last_p = p; last_f = fg_frame_id;
     }
 }
-void tmp_fg_idle(VkCommandBuffer cb) { fg_frame(cb, false, NULL, NULL, 0, 0, 0, false); }
+void tmp_fg_idle(VkCommandBuffer cb) { vkq_drain(); fg_frame(cb, false, NULL, NULL, 0, 0, 0, false); }
 
 // exec.c vk_present_draw: where to render this frame without its HUD (NULL: frame generation off, or
 // XCDE_FG_NO_HUDLESS=1). The copy is used from the next configure on: frames keep the same HUD layout from one to the next.
