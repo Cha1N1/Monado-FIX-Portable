@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Monado
+Comment=Xenoblade Chronicles DE recompilation (needs your own game dump)
+Exec=monado
+Icon=monado
+Categories=Game;
+Terminal=false
