@@ -856,6 +856,155 @@ static void pc_poll() {
     if (g_pc_then_play) g_pc_play_now = true;
 }
 
+// ------------------------------------------------------------------ game code (release packages)
+// [XCDE] A release package ships the runtime without recompiled game code (CMake MONADO_RELEASE). On first start the
+// launcher runs the packaged builder (tools/gamebuild.py, frozen as monado-gamebuild): it lifts the code from the
+// player's own targets/exefs and links gamebuild/lasgame.{dll,so} in this folder, which the runtime loads
+// (runtime/gamelib.c). Source builds have the code in the executable: no gamebuild/link.json, and everything below
+// reports ready.
+#ifdef _WIN32
+static HANDLE g_gc_proc;
+#define GC_LIB "lasgame.dll"
+#define GC_TOOL "monado-gamebuild.exe"
+#else
+static pid_t g_gc_proc;
+#define GC_LIB "lasgame.so"
+#define GC_TOOL "monado-gamebuild"
+#endif
+static bool g_gc_then_play, g_gc_play_now, g_gc_auto;
+static float g_gc_frac;
+static std::string g_gc_text;
+static std::string gc_dir() {  // the packaged builder and its resources (read-only)
+    const char *env = getenv("XCDE_GAMEBUILD_DIR");  // (AppRun: inside the AppImage)
+    if (env && *env) return env;
+    return path("build/gamebuild");                  // (Windows ZIP: <package>/build/gamebuild)
+}
+static bool gc_available() {
+    SDL_PathInfo pi;
+    return SDL_GetPathInfo((gc_dir() + "/link.json").c_str(), &pi);
+}
+static std::string read_line(const std::string &file) {
+    std::string line;
+    FILE *f = fopen(file.c_str(), "r");
+    if (!f) return line;
+    char buf[128];
+    if (fgets(buf, sizeof buf, f)) line = buf;
+    fclose(f);
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r' || line.back() == ' ')) line.pop_back();
+    return line;
+}
+// A library this runtime accepts: gamebuild/<lib>.id (written by the builder) equals the package's gamelib-id.txt.
+static bool gc_ready() {
+    if (!gc_available()) return true;
+    std::string id = read_line(path("gamebuild/" GC_LIB ".id"));
+    return !id.empty() && id == read_line(gc_dir() + "/gamelib-id.txt");
+}
+static bool gc_running() {
+#ifdef _WIN32
+    return g_gc_proc != NULL;
+#else
+    return g_gc_proc != 0;
+#endif
+}
+static bool gc_start(bool then_play) {
+    if (gc_running() || pc_running() || !gc_available() || gc_ready()) return false;
+    std::string tool = gc_dir() + "/" GC_TOOL;
+    SDL_PathInfo pi;
+    if (!SDL_GetPathInfo(tool.c_str(), &pi)) {
+        g_status = g.ui_lang ? "The package is incomplete: build/gamebuild/" GC_TOOL " is missing." :
+                               "El paquete está incompleto: falta build/gamebuild/" GC_TOOL ".";
+        return false;
+    }
+    SDL_CreateDirectory(path("gamebuild").c_str());
+    remove(path("gamebuild/progress.txt").c_str());
+    std::string root = path("targets"), out = path("gamebuild"), log = path("build/last_gamebuild.log");
+#ifdef _WIN32
+    std::string cmd = "\"" + tool + "\" --root \"" + root + "\" --out \"" + out + "\" --resources \"" + gc_dir() + "\"";
+    STARTUPINFOA si = {};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi2 = {};
+    SECURITY_ATTRIBUTES sa = {sizeof sa, NULL, TRUE};
+    HANDLE h = CreateFileA(log.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = si.hStdError = h;
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    }
+    std::vector<char> buf(cmd.begin(), cmd.end());
+    buf.push_back(0);
+    BOOL ok = CreateProcessA(tool.c_str(), buf.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, NULL,
+                             g_root.c_str(), &si, &pi2);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    if (!ok) { g_status = std::string(g.ui_lang ? "Could not start the game code build (error " : "No se pudo preparar el código del juego (error ") + std::to_string(GetLastError()) + ")"; return false; }
+    CloseHandle(pi2.hThread);
+    g_gc_proc = pi2.hProcess;
+#else
+    pid_t pid = spawn_logged({tool, "--root", root, "--out", out, "--resources", gc_dir()}, log, true);
+    if (!pid) { g_status = std::string(g.ui_lang ? "Could not start the game code build (" : "No se pudo preparar el código del juego (") + strerror(errno) + ")"; return false; }
+    g_gc_proc = pid;
+#endif
+    g_gc_then_play = then_play;
+    g_gc_frac = 0;
+    g_gc_text = g.ui_lang ? "Reading the game files..." : "Leyendo los archivos del juego...";
+    g_status = g.ui_lang ? "Preparing the game code from your game files (only once, a few minutes)" :
+                           "Preparando el código del juego desde tus archivos (solo una vez, unos minutos)";
+    return true;
+}
+static void gc_stop() {  // (closing the launcher: the builder keeps what it compiled and continues next time)
+    if (!gc_running()) return;
+#ifdef _WIN32
+    TerminateProcess(g_gc_proc, 1);
+    WaitForSingleObject(g_gc_proc, 2000);
+    CloseHandle(g_gc_proc);
+    g_gc_proc = NULL;
+#else
+    kill(-g_gc_proc, SIGTERM);
+    bool ended = false;
+    for (int i = 0; i < 20 && !ended; i++) { ended = waitpid(g_gc_proc, NULL, WNOHANG) == g_gc_proc; if (!ended) SDL_Delay(100); }
+    if (!ended) { kill(-g_gc_proc, SIGKILL); waitpid(g_gc_proc, NULL, 0); }
+    g_gc_proc = 0;
+#endif
+}
+static void gc_poll() {
+    if (!gc_running()) return;
+    static Uint64 last;
+    Uint64 now = SDL_GetTicks();
+    if (now - last < 250) return;
+    last = now;
+    FILE *f = fopen(path("gamebuild/progress.txt").c_str(), "r");
+    if (f) {
+        char phase[24] = "";
+        unsigned long long done = 0, total = 0;
+        if (fscanf(f, "%23s %llu %llu", phase, &done, &total) == 3 && total) {
+            int step = !strcmp(phase, "generate") ? 0 : !strcmp(phase, "compile") ? 1 : 2;
+            g_gc_frac = (step + (float)done / (float)total) / 3.0f;
+            char t[160];
+            if (step == 0) snprintf(t, sizeof t, g.ui_lang ? "Reading the game code: %llu of %llu" : "Leyendo el código del juego: %llu de %llu", done, total);
+            else if (step == 1) snprintf(t, sizeof t, g.ui_lang ? "Compiling the game code: %llu of %llu files" : "Compilando el código del juego: %llu de %llu archivos", done, total);
+            else snprintf(t, sizeof t, "%s", g.ui_lang ? "Linking the game code..." : "Enlazando el código del juego...");
+            g_gc_text = t;
+        }
+        fclose(f);
+    }
+#ifdef _WIN32
+    if (WaitForSingleObject(g_gc_proc, 0) != WAIT_OBJECT_0) return;
+    DWORD code = 1;
+    GetExitCodeProcess(g_gc_proc, &code);
+    CloseHandle(g_gc_proc);
+    g_gc_proc = NULL;
+#else
+    int st = 0;
+    if (waitpid(g_gc_proc, &st, WNOHANG) != g_gc_proc) return;
+    int code = WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+    g_gc_proc = 0;
+#endif
+    bool ok = code == 0 && gc_ready();
+    g_status = ok ? (g.ui_lang ? "Game code ready." : "Código del juego listo.") :
+                    (g.ui_lang ? "Preparing the game code failed (log: build/last_gamebuild.log)" :
+                                 "Falló la preparación del código del juego (registro: build/last_gamebuild.log)");
+    if (ok && g_gc_then_play) g_gc_play_now = true;
+}
+
 // ------------------------------------------------------------------ remapping capture
 static int cap_dev = -1, cap_slot = -1;  // dev 0 keyboard, 1 controller, 2 keyboard (second key)
 static Uint64 cap_until, cap_since;
@@ -1688,6 +1837,17 @@ int main(int argc, char **argv) {
                                                                    : T("Listo. La primera vez, JUGAR prepara los shaders antes (unos minutos)"))
                                                        : g_status.c_str());
         pc_poll();
+        gc_poll();
+        // [XCDE] release packages: prepare the game code once, as soon as the game files are there
+        if (!shot && have_game && have_exe && !*g_mismatch_desc && !g_gc_auto && gc_available() && !gc_ready() &&
+            !gc_running() && !pc_running())
+            g_gc_auto = gc_start(false);
+        if (gc_running()) ImGui::ProgressBar(g_gc_frac, ImVec2(-1, 0), g_gc_text.c_str());
+        if (g_gc_play_now) {
+            g_gc_play_now = false;
+            if (!pc_done()) pc_start(true);
+            else { launch(); launched = g_launched_ok; if (launched) run = false; }
+        }
         if (pc_running()) {
             ImGui::ProgressBar(g_pc_frac, ImVec2(-150 * scale, 0), g_pc_text.c_str());
             ImGui::SameLine();
@@ -1703,18 +1863,19 @@ int main(int argc, char **argv) {
             launched = g_launched_ok;
             if (launched) run = false;
         }
-        ImGui::BeginDisabled(!have_game || !have_exe || launched || pc_running() || *g_mismatch_desc);
+        ImGui::BeginDisabled(!have_game || !have_exe || launched || pc_running() || gc_running() || *g_mismatch_desc);
         ImGui::PushStyleColor(ImGuiCol_Button, monado_crimson());
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.20f, 0.30f, 1));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.96f, 0.30f, 0.38f, 1));
         if (ImGui::Button(T("JUGAR"), ImVec2(200 * scale, 0))) {
-            if (!pc_done()) pc_start(true);
+            if (!gc_ready()) gc_start(true);
+            else if (!pc_done()) pc_start(true);
             else { launch(); launched = g_launched_ok; if (launched) run = false; }
         }
         ImGui::PopStyleColor(3);
         ImGui::EndDisabled();
         ImGui::SameLine();
-        ImGui::BeginDisabled(pc_running() || !have_exe || *g_mismatch_desc);
+        ImGui::BeginDisabled(pc_running() || gc_running() || !have_exe || *g_mismatch_desc);
         if (ImGui::Button(T("Precompilar shaders"))) pc_start(false);
         ImGui::SetItemTooltip("%s", g.ui_lang ? "Prepare every shader ahead of time, so new areas don't stop to compile them. Progress is kept."
                                               : "Prepara todos los shaders por adelantado, para que las zonas nuevas no se paren a compilarlos. El progreso se conserva.");
@@ -1750,7 +1911,7 @@ int main(int argc, char **argv) {
             SDL_Event wake; if (SDL_WaitEventTimeout(&wake,(SDL_GetWindowFlags(win)&SDL_WINDOW_MINIMIZED) ? 250 : 80)) SDL_PushEvent(&wake);
         }
     }
-    if (!launched) pc_stop();  // (closing the launcher stops a precompilation; what it wrote is kept)
+    if (!launched) { pc_stop(); gc_stop(); }  // (closing the launcher stops a precompilation; what it wrote is kept)
     ImGui_ImplSDLRenderer3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();

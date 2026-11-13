@@ -14,6 +14,9 @@ project(Monado LANGUAGES C CXX)
 
 set(ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 option(MONADO_RUNTIME_ONLY "Compile the runtime only (no generated game code, no link)" OFF)
+# Release packages (docs/BUILD-CMAKE.md): the executable holds no game code. It loads lasgame.so / lasgame.dll, which
+# the launcher builds once from the player's own dump (tools/gamebuild.py); nothing derived from the game ships.
+option(MONADO_RELEASE "Runtime without game code: loads the game library the launcher builds on first start" OFF)
 if(CMAKE_C_COMPILER MATCHES "zig")
   set(MONADO_ZIG ON)
   set(MARCH -march=x86_64_v2)   # (zig's CPU model name)
@@ -27,7 +30,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(RT_UNITS loader dispatch kernel ipc fnprof services/fs services/romfs_virtual services/am services/acc services/time
     services/hid_set services/kbicons services/misc services/audio services/hwopus hle/heaps hle/pl hle/vi hle/nvn_boot
     hle/fibers hle/input hle/party hle/bindings hle/movie hle/framepace hle/foliage_distance hle/foliage_pool hle/graphics
-    host/stubs host/settings_ini host/stubs_gfx host/gamelib_static host/main_boot diag/diag diag/sampler diag/watchdog
+    host/stubs host/settings_ini host/stubs_gfx host/main_boot diag/diag diag/sampler diag/watchdog
     diag/crashdump paths)
 set(NVN_UNITS astc cmdbuf formats maxwell/translate objects output_scale smaa_data tegra texpatch vulkan/device
     vulkan/exec vulkan/precompile vulkan/shaders vulkan/textures vulkan/temporal vulkan/vkq vulkan/fsr4)
@@ -42,6 +45,20 @@ else()
   list(APPEND RT_UNITS platform/linux)
 endif()
 set(RT_SOURCES)
+if(MONADO_RELEASE)
+  list(APPEND RT_UNITS gamelib)
+  # GAMELIB_ID: the fingerprint of the generator, guest headers and guest flags (tools/game_id.py). The first-start
+  # builder stamps the library with the same one; the runtime loads no other.
+  execute_process(COMMAND "${Python3_EXECUTABLE}" tools/game_id.py WORKING_DIRECTORY "${ROOT}"
+                  OUTPUT_VARIABLE GAMELIB_ID OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _gid)
+  if(NOT _gid EQUAL 0 OR NOT GAMELIB_ID)
+    message(FATAL_ERROR "tools/game_id.py failed")
+  endif()
+  message(STATUS "release runtime, GAMELIB_ID ${GAMELIB_ID}")
+else()
+  list(APPEND RT_UNITS host/gamelib_static)
+  set(GAMELIB_ID dev)
+endif()
 foreach(u IN LISTS RT_UNITS)
   list(APPEND RT_SOURCES runtime/${u}.c)
 endforeach()
@@ -57,7 +74,7 @@ add_custom_command(OUTPUT "${GEN_INC}/smaa_hlsl.inc"
   DEPENDS tools/gen_smaa_inc.py third_party/smaa/SMAA.hlsl WORKING_DIRECTORY "${ROOT}" VERBATIM)
 set_source_files_properties(runtime/nvn/smaa_data.c PROPERTIES OBJECT_DEPENDS "${GEN_INC}/smaa_hlsl.inc")
 
-if(NOT MONADO_RUNTIME_ONLY)
+if(NOT MONADO_RUNTIME_ONLY AND NOT MONADO_RELEASE)
   file(GLOB GAME_SOURCES CONFIGURE_DEPENDS "${ROOT}/generated/main/*.c" "${ROOT}/generated/sdk/*.c")
   if(NOT GAME_SOURCES OR NOT EXISTS "${ROOT}/generated/main/main_id.h")
     message(FATAL_ERROR "generated/ is empty: run tools/gen_all.py --out generated first (it needs your dump in targets/), "
@@ -79,7 +96,7 @@ if(WIN32)
   add_library(monado_rt OBJECT ${RT_SOURCES})
   target_compile_options(monado_rt PRIVATE ${RT_C_FLAGS})
   target_include_directories(monado_rt PRIVATE ${RT_C_INCLUDES})
-  target_compile_definitions(monado_rt PRIVATE "GAMELIB_ID=\"dev\"")
+  target_compile_definitions(monado_rt PRIVATE "GAMELIB_ID=\"${GAMELIB_ID}\"")
   set_source_files_properties(runtime/host/main_boot.c PROPERTIES COMPILE_DEFINITIONS XCDE_GFX)
   set_source_files_properties(runtime/nvn/smaa_data.c PROPERTIES INCLUDE_DIRECTORIES "${GEN_INC};${ROOT}/third_party/smaa/Textures")
 
@@ -99,6 +116,10 @@ if(WIN32)
   endforeach()
   list(APPEND GAME_LINK_LIBS winmm dbghelp)
   set(GAME_LINK_OPTIONS ${MARCH} -Wl,--stack,268435456)
+  if(MONADO_RELEASE)  # the game library links against the executable's exports (tools/gamebuild_stage.py --link-file)
+    file(MAKE_DIRECTORY "${ROOT}/build/gamebuild")
+    list(APPEND GAME_LINK_OPTIONS -Wl,--export-all-symbols "-Wl,--out-implib,${ROOT}/build/gamebuild/xcde_imports.a")
+  endif()
   set(GAME_NAME xcde)
   set(GAME_OBJECTS $<TARGET_OBJECTS:monado_rt> $<TARGET_OBJECTS:monado_ui> $<TARGET_OBJECTS:monado_dlss>
                    $<TARGET_OBJECTS:monado_vma>)
@@ -131,7 +152,10 @@ else()
   pkg_check_modules(LAUNCHER_DEPS REQUIRED IMPORTED_TARGET sdl3 vulkan)
   set(VMA_INCLUDE_DIR "$ENV{VMA_INCLUDE_DIR}" CACHE PATH "Directory with vk_mem_alloc.h, if it is not installed system-wide")
   # scripts/build_linux.sh flags (runtime and game code alike)
-  set(LINUX_FLAGS -O1 ${MARCH} -ffp-contract=off -fno-strict-aliasing -fvisibility=hidden -D_GNU_SOURCE -w)
+  set(LINUX_FLAGS -O1 ${MARCH} -ffp-contract=off -fno-strict-aliasing -D_GNU_SOURCE -w)
+  if(NOT MONADO_RELEASE)  # a release runtime keeps default visibility: the game library resolves its symbols (-rdynamic)
+    list(APPEND LINUX_FLAGS -fvisibility=hidden)
+  endif()
   set(LINUX_INCLUDES runtime runtime/nvn third_party "${GEN_INC}")
   if(VMA_INCLUDE_DIR)
     list(APPEND LINUX_INCLUDES "${VMA_INCLUDE_DIR}")
@@ -141,7 +165,7 @@ else()
   add_library(monado_rt OBJECT ${RT_SOURCES})
   target_compile_options(monado_rt PRIVATE ${LINUX_FLAGS})
   target_include_directories(monado_rt PRIVATE ${LINUX_INCLUDES} third_party/smaa/Textures)
-  target_compile_definitions(monado_rt PRIVATE "GAMELIB_ID=\"dev\"" XCDE_GFX)
+  target_compile_definitions(monado_rt PRIVATE "GAMELIB_ID=\"${GAMELIB_ID}\"" XCDE_GFX)
   target_link_libraries(monado_rt PRIVATE PkgConfig::DEPS)
   # [XCDE] T-RUNTIME-O2: the two Vulkan units that dominate the render thread's CPU time
   set_source_files_properties(runtime/nvn/vulkan/exec.c runtime/nvn/vulkan/textures.c PROPERTIES COMPILE_OPTIONS -O2)
@@ -150,7 +174,7 @@ else()
   target_compile_options(monado_ui PRIVATE ${LINUX_FLAGS} -std=c++17)
   target_include_directories(monado_ui PRIVATE ${LINUX_INCLUDES} ${IMGUI} ${IMGUI}/backends third_party/streamline/include
                              runtime/nvn/vulkan)
-  target_compile_definitions(monado_ui PRIVATE "GAMELIB_ID=\"dev\"")
+  target_compile_definitions(monado_ui PRIVATE "GAMELIB_ID=\"${GAMELIB_ID}\"")
   target_link_libraries(monado_ui PRIVATE PkgConfig::DEPS)
 
   set(GAME_LINK_LIBS PkgConfig::DEPS Threads::Threads ${CMAKE_DL_LIBS} m)
@@ -182,16 +206,21 @@ if(MONADO_RUNTIME_ONLY)
 endif()
 
 # ---- the game code (scripts/build_boot.sh on Windows) and the game executable ----
+if(MONADO_RELEASE)
+  set(GAME_CODE)
+else()
 add_library(monado_game OBJECT ${GAME_SOURCES})
 target_compile_options(monado_game PRIVATE ${GAME_C_FLAGS})
 target_include_directories(monado_game PRIVATE runtime)
 if(NOT WIN32)
   target_include_directories(monado_game PRIVATE ${LINUX_INCLUDES})
-  target_compile_definitions(monado_game PRIVATE "GAMELIB_ID=\"dev\"")
+  target_compile_definitions(monado_game PRIVATE "GAMELIB_ID=\"${GAMELIB_ID}\"")
   target_link_libraries(monado_game PRIVATE PkgConfig::DEPS)
 endif()
 
-add_executable(monado_game_exe ${GAME_OBJECTS} $<TARGET_OBJECTS:monado_game>)
+set(GAME_CODE $<TARGET_OBJECTS:monado_game>)
+endif()
+add_executable(monado_game_exe ${GAME_OBJECTS} ${GAME_CODE})
 set_target_properties(monado_game_exe PROPERTIES OUTPUT_NAME ${GAME_NAME} LINKER_LANGUAGE CXX
                       RUNTIME_OUTPUT_DIRECTORY "${OUT}")
 target_link_libraries(monado_game_exe PRIVATE ${GAME_LINK_LIBS})

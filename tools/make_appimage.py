@@ -6,6 +6,10 @@ FSR 3 / FSR 4 Lite components when they were built (with their sources and licen
 the non-system shared libraries they need. GPU drivers, the Vulkan loader and glibc always come from the host.
 
   python3 tools/make_appimage.py [--output build/Monado-x86_64.AppImage] [--appimagetool appimagetool]
+
+--release packages a runtime built with CMake -DMONADO_RELEASE=ON instead: it holds NO game code and can be shared.
+The launcher builds the game code once from the player's own dump with the packaged builder (build/gamebuild:
+tools/gamebuild_stage.py + tools/freeze_gamebuild.py). The packaged tree is checked with tools/package_guard.py.
 Needs appimagetool (https://github.com/AppImage/appimagetool) on PATH or given with --appimagetool.
 """
 import argparse
@@ -42,6 +46,8 @@ def main():
     ap.add_argument('--fsr4-assets', type=Path, default=ROOT / 'build/fsr4/assets', help='prepared FSR 4 Lite assets')
     ap.add_argument('--output', type=Path, default=ROOT / 'build/Monado-x86_64.AppImage')
     ap.add_argument('--appimagetool', default='appimagetool')
+    ap.add_argument('--release', action='store_true', help='runtime without game code + the first-start builder')
+    ap.add_argument('--gamebuild', type=Path, default=ROOT / 'build/gamebuild', help='staged builder (--release)')
     a = ap.parse_args()
     build, output = a.build.resolve(), a.output.resolve()
     for name in ('monado', 'monado-launcher'):
@@ -49,6 +55,15 @@ def main():
             ap.error(f'missing {build / name}: run scripts/build_linux.sh first (docs/LINUX.md)')
     if shutil.which(a.appimagetool) is None and not Path(a.appimagetool).is_file():
         ap.error(f'{a.appimagetool} not found (https://github.com/AppImage/appimagetool)')
+    if a.release:
+        gamebuild = a.gamebuild.resolve()
+        for name in ('link.json', 'gamelib-id.txt', 'monado-gamebuild'):
+            if not (gamebuild / name).is_file():
+                ap.error(f'missing {gamebuild / name}: run tools/gamebuild_stage.py and tools/freeze_gamebuild.py')
+        # The release runtime must not contain lifted game functions (f_<guest address>).
+        symbols = subprocess.run(['nm', '--defined-only', str(build / 'monado')], text=True, capture_output=True).stdout
+        if re.search(r' f_7[0-9a-f]{9}\b', symbols):
+            ap.error(f'{build / "monado"} contains game code: build it with CMake -DMONADO_RELEASE=ON')
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='monado-appdir-', dir=output.parent) as temp:
         appdir = Path(temp)  # (fresh: no stale files, caches or dumps can enter the package)
@@ -100,6 +115,13 @@ def main():
         for name in ('AppRun', 'monado.desktop', 'monado.svg'):
             shutil.copy2(ROOT / 'packaging/linux' / name, appdir / name)
         shutil.copy2(ROOT / 'data/variants_seed.bin', share / 'variants_seed.bin')
+        if a.release:  # the first-start builder and its resources (AppRun exports XCDE_GAMEBUILD_DIR)
+            shutil.copytree(a.gamebuild.resolve(), share / 'gamebuild', symlinks=False,
+                            ignore=shutil.ignore_patterns('obj', 'generated', 'progress.txt', '*.log'))
+            (share / 'gamebuild/monado-gamebuild').chmod(0o755)
+            guard = subprocess.run(['python3', str(ROOT / 'tools/package_guard.py'), str(appdir)], text=True)
+            if guard.returncode != 0:
+                raise SystemExit('package_guard: the AppImage tree holds game or derived files (see above)')
         for name in ('LICENSE', 'NOTICE.md'):
             shutil.copy2(ROOT / name, docs / name)
         for source in (ROOT / 'third_party').rglob('*'):  # (bundled source dependencies' licence notices)
@@ -112,7 +134,8 @@ def main():
             staged = Path(dest) / output.name
             subprocess.run([a.appimagetool, str(appdir), str(staged)], env=dict(os.environ, ARCH='x86_64'), check=True)
             os.replace(staged, output)
-    print(f'Created {output} (contains the game code recompiled from your dump: for your own use only)')
+    print(f'Created {output} ' + ('(release: no game code; the launcher builds it from the player\'s dump)' if a.release
+                                  else '(contains the game code recompiled from your dump: for your own use only)'))
 
 
 if __name__ == '__main__':

@@ -527,7 +527,7 @@ def write_if_changed(path, text):
         f.write(text)
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('name')
     ap.add_argument('nso')
@@ -541,7 +541,7 @@ def main():
     ap.add_argument('--patches')  # [XCDE] games/<id>/patches.py
     ap.add_argument('--simd', choices=('asm', 'c'),
                     default='asm' if platform.machine().lower() in ('arm64', 'aarch64') else 'c')
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     t0 = time.time()
     import patchfmt  # [XCDE]
