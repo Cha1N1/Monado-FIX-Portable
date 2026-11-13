@@ -17,11 +17,15 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifdef __linux__
+#include <unistd.h>  // [XCDE] T-LINUX-GTT: dup/close of the dma-buf fd
+#endif
 
 #include "../../kernel.h"
 #include "shaders.h"
 #include "vk.h"
 #include "cliff_batch.h"  // [XCDE] T-CLIFF-BATCH
+#include "bloom_prefilter.h"  // [XCDE] T-BLOOM-PREFILTER
 #include "temporal.h"
 void vk_watch(VkImage dst, const char *site);  // [XCDE] debugging: log writes to a watched image
 static VkImage g_watch_img;
@@ -2139,10 +2143,24 @@ static void save_glsl(const char *src, uint64_t addr, const char *suffix) {
     if (f) { fputs(src, f); fclose(f); }
 }
 
+// [XCDE] T-BLOOM-PREFILTER (bloom_prefilter.h): matched by the guest program's code (the draw-time fragment
+// hash), so every translated variant of it is replaced; the replacement source has its own SPIR-V cache identity.
+static const char *bloom_prefilter_src(uint64_t code) {
+    static int mode = -1;
+    if (mode < 0) { const char *e = getenv("XCDE_BLOOM_PREFILTER"); mode = e ? atoi(e) : 2; }
+    if (!mode || !code) return NULL;
+    if (hmix(1469598103934665603ull, (const void *)(uintptr_t)(code + 0x30), 0x200) != 0x2aa23b65117ab1a5ull) return NULL;
+    static int reported;
+    if (!__atomic_exchange_n(&reported, 1, __ATOMIC_RELAXED))
+        LOG("[bloom] full-footprint prefilter enabled%s\n", mode == 1 ? " (no firefly weighting)" : " (firefly weighting)");
+    return mode == 1 ? monado_bloom_prefilter_box_glsl : monado_bloom_prefilter_karis_glsl;
+}
+
 static void compile_program(void *arg) {
     Prog *p = arg;
     size_t nv = 0, nf = 0;
     const char *fs_src = p->fi->msl;
+    { const char *b = bloom_prefilter_src(p->src[1]); if (b) fs_src = b; }
     char *fs_over = NULL;
     if (getenv("XCDE_GLSL_DIR")) {  // [XCDE] debugging: a hand-edited fragment shader (<dir>/<code addr>_fs.glsl) replaces the translated one
         char path[512];
@@ -4532,7 +4550,60 @@ void vk_gmem_check(uint64_t frame) {
         (unsigned long long)pages, (unsigned long long)first);
 }
 
+// [XCDE] T-LINUX-GTT: scheme adapted from weeping-of-the-empire, fe2345e8,
+// MIT (daniel-madrid-07); see third_party/weeping-of-the-empire/LICENSE.
+#ifdef __linux__
+static bool gmem_import_dma(uint64_t size) {
+    uint64_t full_size = 0;
+    int source_fd = plat_gpu_heap_fd(HEAP_BASE, size, &full_size);
+    if (source_fd < 0) return false;
+    if (!g_vk.dmabuf_import) FATAL("driver-owned heap requires dma-buf Vulkan support; retry with XCDE_GPU_BO=0\n");
+    PFN_vkGetMemoryFdPropertiesKHR get_properties =
+        (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(g_vk.dev, "vkGetMemoryFdPropertiesKHR");
+    VkMemoryFdPropertiesKHR properties = {.sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
+    if (!get_properties || get_properties(g_vk.dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, source_fd, &properties) != VK_SUCCESS)
+        FATAL("dma-buf properties failed; retry with XCDE_GPU_BO=0\n");
+    VkExternalMemoryBufferCreateInfo external = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+    VkBufferCreateInfo buffer_info = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &external, .size = full_size,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
+    VkBuffer buffer;
+    VK_CHECK(vkCreateBuffer(g_vk.dev, &buffer_info, NULL, &buffer));
+    VkMemoryRequirements requirements;
+    vkGetBufferMemoryRequirements(g_vk.dev, buffer, &requirements);
+    uint32_t types = properties.memoryTypeBits & requirements.memoryTypeBits;
+    if (!types || requirements.size > full_size) FATAL("dma-buf heap does not satisfy Vulkan buffer requirements; retry with XCDE_GPU_BO=0\n");
+    int fd = dup(source_fd);
+    if (fd < 0) FATAL("could not duplicate dma-buf fd\n");
+    VkImportMemoryFdInfoKHR imported = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, .fd = fd};
+    VkMemoryDedicatedAllocateInfo dedicated = {.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+        .pNext = &imported, .buffer = buffer};
+    VkMemoryAllocateInfo allocation = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &dedicated,
+        .allocationSize = full_size, .memoryTypeIndex = (uint32_t)__builtin_ctz(types)};
+    VkDeviceMemory memory;
+    VkResult result = vkAllocateMemory(g_vk.dev, &allocation, NULL, &memory);
+    if (result != VK_SUCCESS) {
+        close(fd);  // a successful Vulkan import owns its duplicate; a failed one does not
+        vkDestroyBuffer(g_vk.dev, buffer, NULL);
+        FATAL("dma-buf allocation failed (%d); retry with XCDE_GPU_BO=0\n", result);
+    }
+    VK_CHECK(vkBindBufferMemory(g_vk.dev, buffer, memory, 0));
+    if (gmem_buf) vk_defer_import(gmem_buf, gmem_mem);  // (T254: submitted work may still use the old one)
+    gmem_buf = buffer;
+    gmem_mem = memory;
+    gmem_size = full_size;
+    LOG("[vk] guest heap imported by dma-buf: %llu MiB, driver-owned GTT, memory type %u\n",
+        (unsigned long long)(full_size >> 20), allocation.memoryTypeIndex);
+    return true;
+}
+#endif
+
 static bool gmem_import(uint64_t size) {
+#ifdef __linux__
+    if (gmem_import_dma(size)) return true;
+#endif
     PFN_vkGetMemoryHostPointerPropertiesEXT props =
         (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(g_vk.dev, "vkGetMemoryHostPointerPropertiesEXT");
     VkMemoryHostPointerPropertiesEXT mp = {.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
@@ -4584,7 +4655,7 @@ static uint64_t gmem_tried;  // heap size the import was last attempted for (gme
 
 static VkDescriptorBufferInfo gmem_info(void) {
     static int off = -1;
-    if (off < 0) off = getenv("LARECOMP_VK_NO_GMEM") != NULL || !g_vk.host_import;
+    if (off < 0) off = getenv("LARECOMP_VK_NO_GMEM") != NULL || (!g_vk.host_import && !g_vk.dmabuf_import);  // [XCDE] T-LINUX-GTT
     uint64_t want = (kernel_heap_size() + 0xFFFF) & ~0xFFFFull;
     if (want > HEAP_MAX) want = HEAP_MAX;
     if (!off && want > gmem_size && !gmem_import(want)) {
@@ -4767,6 +4838,22 @@ static struct { VkBuffer b; VmaAllocation m; uint64_t seq; } vc_dead[VC_DEAD];
 static int vc_ndead;
 static int vc_on = -1;
 int vk_vcache_state(void) { return vc_on; }  // -1 not decided yet, 0 off, 1 on (objects.c frame lag)
+// [XCDE] T-FRAME-LAG: objects.c latches "one frame in flight" here once nvnSyncWait decides it. It matters to the vertex
+// cache: the cache keeps vertex / index data safe for a frame the GPU has not finished only because the GPU reads the
+// cache's device-local copies. Those copies are refreshed in the submission, and a copy recorded from guest memory runs
+// when the GPU gets to it - with the GPU a frame behind, that is after the game rewrote those pages with the next
+// frame's data. The draws then read another frame's contents: effect / particle streams change entirely between frames,
+// so they draw as huge stretched quads (the beams and glows in a battle). vc_flush stages written pages through host
+// memory at submit time instead when this is on; with the frame wait intact the direct copy is already ordered.
+static _Atomic bool vc_lag;
+void vk_set_frame_lag(bool on) { atomic_store(&vc_lag, on); }
+// XCDE_VC_STAGE=0: record the refresh from guest memory as before (with the GPU a frame behind that copy can run after
+// the game rewrote the pages: the reference way to reproduce the stretched effect / glow corruption for an A/B).
+static bool vc_stage_on(void) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("XCDE_VC_STAGE"); on = !(e && *e == '0'); }
+    return on;
+}
 // (profiler: draws served / read in place, bytes refreshed, write tracking queries, written pages seen, query time)
 uint64_t prof_vc_hits, prof_vc_bypass, prof_vc_copied, prof_vc_queries, prof_vc_scan_pages, prof_vc_scan_ns;
 
@@ -4965,7 +5052,25 @@ void vc_flush(void) {
             cp[nc++] = (VkBufferCopy){o, o - e->lo, VC_PAGE};
         }
         if (nc) {
-            vkCmdCopyBuffer(cb, gmem_buf, e->buf, (uint32_t)nc, cp);
+            bool gpu_pages = false;  // (a GPU writer may fill part of it: those bytes are only current on the GPU timeline)
+            if (atomic_load(&vc_lag) && vc_stage_on() && vc_page_gpu)
+                for (uint64_t p = e->lo / VC_PAGE; p < e->hi / VC_PAGE && !gpu_pages; p++) gpu_pages = vc_page_gpu[p];
+            if (atomic_load(&vc_lag) && vc_stage_on() && !gpu_pages) {
+                // [XCDE] T-FRAME-LAG: copy the pages out now, while they still hold this submission's data, and let the
+                // GPU read the staged bytes. The ring chunk is not reused before this submission completes.
+                uint64_t total = 0;
+                for (int k = 0; k < nc; k++) total += cp[k].size;
+                VkSpan st = vk_transient(total, 16);
+                uint64_t at = 0;
+                for (int k = 0; k < nc; k++) {
+                    memcpy((uint8_t *)st.ptr + at, (const void *)(uintptr_t)(HEAP_BASE + cp[k].srcOffset), cp[k].size);
+                    cp[k].srcOffset = st.off + at;
+                    at += cp[k].size;
+                }
+                vkCmdCopyBuffer(cb, st.buf, e->buf, (uint32_t)nc, cp);
+            } else {
+                vkCmdCopyBuffer(cb, gmem_buf, e->buf, (uint32_t)nc, cp);
+            }
             for (int k = 0; k < nc; k++) prof_vc_copied += cp[k].size;
         }
         e->gen = g;
@@ -5113,6 +5218,19 @@ static void xsh_stored(int stage) {
         }
         xsh_copy(s, vk_cmd(), a, sz);
     }
+}
+
+// [XCDE] T-STG-WRITERS: would xsh_stored(stage) act for the current storage-buffer bindings? Only when one of them
+// overlaps a mirror or holds an address noted as an in-place read of GPU-written data (otherwise it skips them all).
+static bool xsh_stage_relevant(int stage) {
+    if (!xsh_store_on() || !nwant) return false;
+    for (int i = 0; i < 16; i++) {
+        uint64_t a = st.sbuf[stage][i].addr, sz = st.sbuf[stage][i].size;
+        if (a < HEAP_BASE || !sz || sz > (1ull << 20)) continue;
+        for (int k = 0; k < nxsh; k++) if (xsh[k].base < a + sz && a < xsh[k].base + xsh[k].size) return true;
+        for (int k = 0; k < nwant; k++) if (xsh_want[k] >= a && xsh_want[k] < a + sz) return true;
+    }
+    return false;
 }
 
 static uint64_t g_direct_limit;  // (T175) bytes the buffer guest_direct returned holds from its offset (~0: the rest of it)
@@ -5968,9 +6086,26 @@ static void draw_(CmdRec *r, bool indexed) {
     if (xfb || pr->vi->uses_gmem_store) wst |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
     if (pr->fi->uses_gmem_store) wst |= VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
     if (pr->gi && pr->gi->uses_gmem_store) wst |= VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT;
+    // [XCDE] T-STG-WRITERS: a draw whose only memory writes are vertex-shader stores (no transform-feedback emulation,
+    // no fragment/geometry stores) follows NVN's contract: shader stores are unordered against later draws unless the
+    // game calls nvnCommandBufferBarrier, and the game does (0x1 before a mesh's skinning writers, 0x21 after). A census
+    // of the opening battle found such writers never load global memory and consecutive ones write disjoint buffers,
+    // so back-to-back writers share a pass with no barrier between them. T136's rule stays for transform feedback
+    // (ordered in hardware on Maxwell, so the game issues no barrier there), for any non-writer draw that follows (it
+    // restarts behind the barrier as before), and for writers whose storage buffers a T197 store mirror covers or wants.
+    // XCDE_STG_WRITER_PASS=0: the previous behaviour (a pass break and barrier around every writer).
+    static int stg_on = -1;
+    if (stg_on < 0) { const char *e = getenv("XCDE_STG_WRITER_PASS"); stg_on = !(e && atoi(e) == 0); }
+    static bool stg_tail;        // the previous draw was such a writer and left its pass open
+    static uint64_t stg_tail_seq;
+    bool stg_writer = stg_on && !xfb && wst == VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT && !xsh_stage_relevant(0);
+    bool stg_follow = stg_tail && in_pass && !st.rt_dirty && stg_tail_seq == pass_seq_no;
+    stg_tail = false;
     if (wst) {
-        if (in_pass) st.rt_dirty = true;
+        if (in_pass && !(stg_writer && stg_follow)) st.rt_dirty = true;
         pre_wr |= wst;  // (the barrier before it: earlier reads of guest memory first, T136)
+    } else if (stg_follow) {
+        st.rt_dirty = true;  // (a draw after the open writer pass: behind a barrier, as before)
     }
     static int simg_full = -1;  // XCDE_SIMG_FULL=1: storage images untracked (full barriers around their passes, as before)
     if (simg_full < 0) simg_full = getenv("XCDE_SIMG_FULL") != NULL;
@@ -6566,7 +6701,10 @@ static void draw_(CmdRec *r, bool indexed) {
     // the next draws' vertex fetch; the game issues no barrier in between (Maxwell runs them in order), and Vulkan gives
     // no ordering inside a render pass. Without it the depth prepass drew grass from a half-written vertex buffer, the
     // G-buffer grass then failed its EQUAL depth test: black grass. The next draw starts a new pass behind a full barrier.
-    if (pr->vi->uses_gmem_store || pr->fi->uses_gmem_store || (pr->gi && pr->gi->uses_gmem_store)) {
+    if (stg_writer && !xsh_stage_relevant(0) && in_pass) {  // [XCDE] T-STG-WRITERS: keep the pass open for a following writer
+        stg_tail = true;
+        stg_tail_seq = pass_seq_no;
+    } else if (pr->vi->uses_gmem_store || pr->fi->uses_gmem_store || (pr->gi && pr->gi->uses_gmem_store)) {
         vk_end_pass(); st.rt_dirty = true; pass_untracked = !(mem_track_mode() & 1);
         if (nwant) { if (pr->vi->uses_gmem_store) xsh_stored(0); if (pr->fi->uses_gmem_store) xsh_stored(1); }  // (T197)
     }
@@ -7122,7 +7260,7 @@ static VkPipeline post_pipeline(const char *fs) {
 // Post image `i` at w x h (RGBA8, kept until the size changes). 0, 1: SMAA edges / weights, 2: SMAA output,
 // 3, 4: FSR EASU / RCAS.
 static TexBackend *post_image(int i, uint32_t w, uint32_t h) {
-    static TexBackend img[6];  // (5: T213 the upscaled scene with the HUD)
+    static TexBackend img[7];  // (5: T213 the upscaled scene with the HUD; 6: the native upscalers' sRGB-encoded output)
     TexBackend *d = &img[i];
     if (d->image && (d->width != w || d->height != h)) {
         vk_views_forget(d);
@@ -7232,6 +7370,15 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
         vk_frame_suspend();
         VkImageView t = tmp_upscale(cb, b, v, cam ? (TexBackend *)tmp_depth_tex->backend : NULL, cam ? &tmp_cam : NULL, tmp_jit,
                                     tmp_dm1, ow, oh);
+#ifdef __linux__
+        if (t && (g_settings.upscaler == UPSCALE_FSR4_LITE || g_settings.upscaler == UPSCALE_FSR3)) {  // [XCDE] linear -> sRGB
+            TexBackend *encoded = post_image(6, ow, oh);
+            float pe[8] = {1.0f / ow, 1.0f / oh};
+            post_pass(cb, "tmp_srgb.frag", &t, 1, encoded, pe, false);
+            vk_full_barrier(cb);
+            t = post_view(encoded);
+        }
+#endif
         VkImageView scene = t ? tmp_hud_scene_view(b->width, b->height) : VK_NULL_HANDLE;
         if (scene) {  // [XCDE] T213: the upscaled scene + what the HUD passes added (render size, bilinear)
             fg_scene = t;
@@ -7266,10 +7413,14 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
         float pe[8] = {iw / ow, ih / oh, 0.5f * iw / ow - 0.5f, 0.5f * ih / oh - 0.5f, iw, ih};
         VkImageView ei[3] = {v};
         post_pass(cb, "easu.frag", ei, 1, e, pe, false);
-        float pr[8] = {exp2f(-0.2f), 0, 0, 0, (float)ow, (float)oh};  // (sharpness 0.2 stops: AMD's default)
-        VkImageView ri_[3] = {post_view(e)};
-        post_pass(cb, "rcas.frag", ri_, 1, r, pr, false);
-        v = post_view(r);
+        v = post_view(e);
+        float sharp = xcde_sharpness(&g_settings);  // [XCDE] RCAS strength (default 0.9 = the previous 0.2 stops); 0 = off
+        if (sharp > 0.0f) {
+            float pr[8] = {exp2f(-(2.0f - 2.0f * sharp)), 0, 0, 0, (float)ow, (float)oh};
+            VkImageView ri_[3] = {v};
+            post_pass(cb, "rcas.frag", ri_, 1, r, pr, false);
+            v = post_view(r);
+        }
         upscaled = true;  // [XCDE] v12 #29: the SMAA below then runs at the output size, after the RCAS sharpening
     }
     // [XCDE] v12 #29: the SMAA moved AFTER the upscaler: at the render resolution it only saw the stairs that exist

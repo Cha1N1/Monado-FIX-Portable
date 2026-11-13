@@ -1,3 +1,4 @@
+#ifdef _WIN32  // [XCDE] T-LINUX: the Streamline integration below is Windows-only
 #define VK_USE_PLATFORM_WIN32_KHR
 // [XCDE] NVIDIA DLSS Super Resolution through Streamline 2.x (third_party/streamline, MIT; sl.interposer.dll,
 // sl.common.dll, sl.dlss.dll and nvngx_dlss.dll next to the exe), for temporal.c. Streamline's manual hooking mode:
@@ -380,3 +381,35 @@ extern "C" bool dlss_evaluate(VkCommandBuffer cb, const TexBackend *color, const
     if (r != sl::Result::eOk) { snprintf(dlss_note, sizeof dlss_note, "DLSS dispatch falló (SDK %d); frame con escalado alternativo", (int)r); static int n; if (n++ < 5) DLOG("[dlss] %s\n", dlss_note); return false; }
     return true;
 }
+#else
+// [XCDE] T-LINUX: NVIDIA ships Streamline/DLSS only as signed Windows DLLs. This build reports DLSS as unavailable
+// (temporal.c then uses another upscaler) and adds no extensions, queues or features to the device.
+#include <stdio.h>
+#include <vulkan/vulkan.h>
+extern "C" {
+#include "temporal.h"
+#include "../../settings.h"
+const char *dlss_status(void) { return "DLSS is only available on Windows"; }
+bool dlss_init_early(void) { return false; }
+int dlss_instance_exts(const char **out, int max) { (void)out; (void)max; return 0; }
+void dlss_validate_adapter(VkPhysicalDevice phys, uint32_t api, uint32_t qfam) { (void)phys; (void)api; (void)qfam; }
+void dlss_device_requirements(const char **ext, uint32_t *n, uint32_t max, VkPhysicalDeviceVulkan12Features *f12,
+                              VkPhysicalDeviceVulkan13Features *f13, uint32_t *extra_gfx, uint32_t *extra_compute) {
+    (void)ext; (void)n; (void)max; (void)f12; (void)f13;
+    *extra_gfx = *extra_compute = 0;
+}
+void dlss_device_created(VkInstance inst, VkPhysicalDevice phys, VkDevice dev, uint32_t qfam) { (void)inst; (void)phys; (void)dev; (void)qfam; }
+bool dlss_create_surface(void *sdl_window, VkInstance instance, VkPhysicalDevice phys, uint32_t qfam, VkSurfaceKHR *surface) {
+    (void)sdl_window; (void)instance; (void)phys; (void)qfam; (void)surface;
+    return false;
+}
+PFN_vkVoidFunction dlss_proxy(VkDevice dev, const char *name) { (void)dev; (void)name; return NULL; }
+bool dlss_available(void) { return false; }
+bool dlss_evaluate(VkCommandBuffer cb, const TexBackend *color, const TexBackend *mv, const TexBackend *depth,
+                   const TexBackend *out, const TexBackend *hud, const float jitter[2], bool reset, const TmpCamera *cam,
+                   const double reproj[16]) {
+    (void)cb; (void)color; (void)mv; (void)depth; (void)out; (void)hud; (void)jitter; (void)reset; (void)cam; (void)reproj;
+    return false;
+}
+}
+#endif  // _WIN32
