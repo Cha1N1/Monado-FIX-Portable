@@ -24,6 +24,7 @@ env:
   APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
   APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
   FFX_URL: https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/v1.1.4/FidelityFX-SDK-v1.1.4.zip
+  FFX_SHA256: 0216556bfb0e243cec30004a2a98d38f4e3f7406cb7938e3c1b85c758e95d952   # (AMD publishes no digest: measured once)
   FSR4_ASSETS_TAG: fsr4-lite-assets
   FSR4_ASSETS_FILE: fsr4-lite-assets.tar.gz
 
@@ -147,7 +148,8 @@ jobs:
       - name: AMD FSR 3 runtime (official FidelityFX SDK 1.1.4) and NVIDIA DLSS (official Streamline, hash-pinned)
         run: |
           Invoke-WebRequest -Uri $env:FFX_URL -OutFile ffx.zip
-          "FidelityFX SDK zip sha256: " + (Get-FileHash ffx.zip -Algorithm SHA256).Hash
+          $hash = (Get-FileHash ffx.zip -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:FFX_SHA256) { throw "FidelityFX SDK zip: sha256 $hash, expected $env:FFX_SHA256" }
           $dll = (tar -tf ffx.zip | Select-String 'PrebuiltSignedDLL/amd_fidelityfx_vk.dll$' | Select-Object -First 1).ToString()
           tar -xf ffx.zip $dll
           New-Item -ItemType Directory -Force build | Out-Null
