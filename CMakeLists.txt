@@ -116,13 +116,25 @@ if(WIN32)
   endforeach()
   list(APPEND GAME_LINK_LIBS winmm dbghelp)
   set(GAME_LINK_OPTIONS ${MARCH} -Wl,--stack,268435456)
-  if(MONADO_RELEASE)  # the game library links against the executable's exports (tools/gamebuild_stage.py --link-file)
-    file(MAKE_DIRECTORY "${ROOT}/build/gamebuild")
-    list(APPEND GAME_LINK_OPTIONS -Wl,--export-all-symbols "-Wl,--out-implib,${ROOT}/build/gamebuild/xcde_imports.a")
+  if(MONADO_RELEASE)
+    # The game library links against xcde.exe's exports (tools/gamebuild_stage.py --link-file xcde_imports.a). zig's
+    # linker has no --export-all-symbols, so the runtime objects' globals are exported through a generated .drectve
+    # (tools/coff_exports.py) and the import library is written from the linked executable (tools/pe_implib.py).
+    set(RELEASE_EXPORTS "${CMAKE_BINARY_DIR}/release_exports.c")
+    add_custom_command(OUTPUT "${RELEASE_EXPORTS}"
+      COMMAND "${Python3_EXECUTABLE}" "${ROOT}/tools/coff_exports.py" --output "${RELEASE_EXPORTS}" --objects
+              "$<TARGET_OBJECTS:monado_rt>" "$<TARGET_OBJECTS:monado_ui>" "$<TARGET_OBJECTS:monado_dlss>"
+              "$<TARGET_OBJECTS:monado_vma>"
+      DEPENDS monado_rt monado_ui monado_dlss monado_vma "${ROOT}/tools/coff_exports.py"
+              "$<TARGET_OBJECTS:monado_rt>" "$<TARGET_OBJECTS:monado_ui>"
+      COMMAND_EXPAND_LISTS VERBATIM)
   endif()
   set(GAME_NAME xcde)
   set(GAME_OBJECTS $<TARGET_OBJECTS:monado_rt> $<TARGET_OBJECTS:monado_ui> $<TARGET_OBJECTS:monado_dlss>
                    $<TARGET_OBJECTS:monado_vma>)
+  if(MONADO_RELEASE)
+    list(APPEND GAME_OBJECTS "${RELEASE_EXPORTS}")
+  endif()
 
   # tools/launcher/build.sh
   set(LAUNCHER_NAME xcde_launcher)
@@ -225,6 +237,12 @@ set_target_properties(monado_game_exe PROPERTIES OUTPUT_NAME ${GAME_NAME} LINKER
                       RUNTIME_OUTPUT_DIRECTORY "${OUT}")
 target_link_libraries(monado_game_exe PRIVATE ${GAME_LINK_LIBS})
 target_link_options(monado_game_exe PRIVATE ${GAME_LINK_OPTIONS})
+if(WIN32 AND MONADO_RELEASE)
+  # zig's linker writes no import library: make one from xcde.exe's export table (tools/pe_implib.py)
+  add_custom_command(TARGET monado_game_exe POST_BUILD
+    COMMAND "${Python3_EXECUTABLE}" "${ROOT}/tools/pe_implib.py" "$<TARGET_FILE:monado_game_exe>"
+            "${ROOT}/build/gamebuild/xcde_imports.a" --zig "${CMAKE_C_COMPILER}" VERBATIM)
+endif()
 if(WIN32)
   # scripts/copy_upscaler_dlls.sh: the AMD / NVIDIA runtime DLLs beside build/xcde.exe, if they were downloaded
   set(SDK_DIR "${ROOT}/sdk" CACHE PATH "Downloaded FidelityFX / Streamline SDKs (scripts/copy_upscaler_dlls.sh)")
