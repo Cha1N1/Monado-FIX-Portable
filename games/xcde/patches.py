@@ -67,3 +67,16 @@ def _scene_aspect(gen, addr):
 
 
 PATCHES[0x70006f7ea0] = Patch(0xbd04c264, _scene_aspect, 'T265', 'store scene projection aspect')
+
+
+# [XCDE] Follower footsteps above 30 FPS: keep the normal marker eligibility
+# check, then reject repeated follower foot contacts across locomotion
+# animation restarts (runtime/hle/party.c xcde_footstep_marker).
+def _footstep_marker(gen, addr):
+    return ('{ extern _Bool xcde_footstep_marker(Cpu *c, uint64_t action, uint64_t marker); '
+            'if (!(c->x[0] & 1) || !xcde_footstep_marker(c, c->x[20], c->x[19])) '
+            'goto L_70003f4c5c; }')
+
+
+PATCHES[0x70003f4c0c] = Patch(0x36000280, _footstep_marker, 'T-FOOTSTEP-TIMING',
+                              'tbz w0, #0 - follower foot marker replay guard')
