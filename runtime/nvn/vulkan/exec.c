@@ -24,6 +24,7 @@
 #include "../../kernel.h"
 #include "shaders.h"
 #include "vk.h"
+#include "cliff_batch.h"  // [XCDE] T-CLIFF-BATCH
 #include "bloom_prefilter.h"  // [XCDE] T-BLOOM-PREFILTER
 #include "temporal.h"
 void vk_watch(VkImage dst, const char *site);  // [XCDE] debugging: log writes to a watched image
@@ -81,6 +82,8 @@ static _Atomic int stat_compiles;
 static _Atomic uint64_t hc_cached_ns, hc_link_ns, hc_whole_ns, hc_cached_n, hc_link_n, hc_whole_n;
 static uint64_t hc_wait_ns, hc_wait_n, hc_upload;
 static uint64_t op_counts[CMD_COUNT];
+static uint64_t cliff_batch_groups, cliff_batch_saved;  // [XCDE] T-CLIFF-BATCH (stats)
+static VkCliffBatch cliff_batch_pending;                // the current draw's group (draws > 1: instanced)
 bool g_debug_frame;
 static char stats_text[2048];
 static double vc_bytes_mb(void);  // [XCDE] T169 (memory report)
@@ -1271,6 +1274,11 @@ void vk_prof_frame(uint64_t frame, uint64_t present_ns) {
 }
 
 const char *renderer_stats(void) {
+    if (cliff_batch_groups) {  // [XCDE] T-CLIFF-BATCH
+        LOG("[cliff-batch] %llu logical draws in %llu instanced draws\n",
+            (unsigned long long)(cliff_batch_groups + cliff_batch_saved), (unsigned long long)cliff_batch_groups);
+        cliff_batch_groups = cliff_batch_saved = 0;
+    }
     static int dumps;
     if (dumps++ < 3) {
         LOG("[vk] command counts:");
@@ -2074,6 +2082,22 @@ static void clear(int index, int kind, const void *color, uint32_t mask, bool de
 
 // ================================================================== programs
 #define MAX_BIND 96
+// [XCDE] T-CLIFF-BATCH: these content-identified cliff programs use instanced
+// vertex attributes, not InstanceIndex/PrimitiveID or shader memory side effects.
+static bool cliff_program_known(const NvnProgram *np) {
+    static const uint64_t pairs[][2] = {
+        {0xc34f15891aaac80cull, 0x11da4a2af3065fbdull},
+        {0x72ef96170d351f3aull, 0x3b4e3e20d272818aull},
+        {0xc18e109999489476ull, 0x908fc1e8bb471902ull},
+        {0x76c9aa8fe4d50168ull, 0x98e65f584ae0f904ull},
+        {0x6828f5292e751f3aull, 0x43f073dbf7f3930eull},
+        {0xe864e50bfe0a87a9ull, 0xf1958d10a7b81ce5ull},
+    };
+    if (np->stage_mask != 3) return false;
+    for (unsigned i = 0; i < sizeof pairs / sizeof pairs[0]; i++)
+        if (np->stages[0].code_hash == pairs[i][0] && np->stages[1].code_hash == pairs[i][1]) return true;
+    return false;
+}
 typedef struct {
     ShaderInfo *vi, *fi;
     uint64_t code[2], cmax[2];  // translation inputs (copied: translated on the translator thread)
@@ -2095,6 +2119,7 @@ typedef struct {
     // compile ended (ns), the SPIR-V the disk cache didn't have, whether prewarm asked for it
     uint64_t t_new, t_x0, t_xl, t_x1, t_c1;
     uint8_t spv_new, prewarmed;
+    bool cliff_candidate;  // [XCDE] T-CLIFF-BATCH: one of the content-identified cliff programs
 } Prog;
 
 static VkPipelineLayout make_layout(Prog *p, int nsets, VkShaderStageFlags s0, VkShaderStageFlags s1) {
@@ -2396,6 +2421,7 @@ static Prog *get_program_(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
     slot->key = h;
     slot->val = p;
     prog_tab.n++;
+    p->cliff_candidate = cliff_program_known(np);
     for (int i = 0; i < 2; i++) {
         p->code[i] = np->stages[i].code_addr;
         p->src[i] = nvn_stage_code(&np->stages[i]);
@@ -3700,6 +3726,7 @@ void vk_prewarm_hold(uint64_t frame_draws) {
 // (the calling thread translates and compiles). Returns 0 if not built; *vs_attr = the vertex inputs it reads.
 int vk_precompile_program(const NvnProgram *np, const ShaderKey *vkey, const ShaderKey *fkey, uint32_t *vs_attr) {
     Prog *p = calloc(1, sizeof *p);
+    p->cliff_candidate = cliff_program_known(np);
     for (int i = 0; i < 2; i++) {
         p->code[i] = np->stages[i].code_addr;
         p->src[i] = nvn_stage_code(&np->stages[i]);
@@ -3745,6 +3772,7 @@ int vk_precompile_variant(const NvnProgram *np, const void *rec, size_t rec_size
     memcpy(&v, rec, sizeof v);
     if (v.has_gs) return 0;
     Prog *p = calloc(1, sizeof *p);
+    p->cliff_candidate = cliff_program_known(np);
     for (int i = 0; i < 2; i++) {
         p->code[i] = np->stages[i].code_addr;
         p->src[i] = nvn_stage_code(&np->stages[i]);
@@ -5924,7 +5952,9 @@ static void draw(CmdRec *r, bool indexed) {
     PROF_ADD(prof_draw);
 }
 static uint64_t prof_tp_;
+static VkCliffBatch cliff_batch_try(CmdRec *r, Prog *pr);
 static void draw_(CmdRec *r, bool indexed) {
+    cliff_batch_pending.draws = 1;  // [XCDE] T-CLIFF-BATCH
     if (prof) prof_tp_ = SDL_GetTicksNS();
     prewarm_drain();  // [XCDE] T163
     if (!st.program) { SKIPPED(); return; }
@@ -6250,6 +6280,7 @@ static void draw_(CmdRec *r, bool indexed) {
         if (nlog2_++ < 8) LOG("[vk] pipeline not ready: state %d""%c", (int)atomic_load(&pp->state), 10);
         SKIPPED(); return;
     }
+    if (indexed && pr->cliff_candidate) cliff_batch_pending = cliff_batch_try(r, pr);  // [XCDE] T-CLIFF-BATCH
     ss_enabled();
     {   // (profiler) how often a draw repeats the previous draw's program / pipeline
         static Pipe *last_pp; static Prog *last_pr;
@@ -6512,6 +6543,7 @@ static void draw_(CmdRec *r, bool indexed) {
         base_vertex = (int32_t)r->x[4];
         base_inst = (uint32_t)r->x[5];
         inst = (uint32_t)r->x[6] ? (uint32_t)r->x[6] : 1;
+        if (cliff_batch_pending.draws > 1) inst = cliff_batch_pending.draws;  // [XCDE] T-CLIFF-BATCH
         const void *src = (const void *)(uintptr_t)iaddr;
         uint32_t restart = st.prim_restart ? st.restart_index : 0xFFFFFFFFu;
         if (native && itype != 0) {
@@ -7577,6 +7609,98 @@ static void split_submit(void) {
     renderer_submit();
 }
 
+// [XCDE] T-CLIFF-BATCH: gather only the command pattern observed in the cliff
+// census. No sorting, shader rewrite, uniform cache or wider visibility scope.
+static bool cliff_feedback_stable(int stage, const ShaderTexture *tex, NvnTexture *t, Prog *pr) {
+    static int cache = -1;
+    if (cache < 0) {
+        const char *e = getenv("XCDE_FEEDBACK_CACHE");
+        cache = (!e || atoi(e) != 0) && !getenv("LARECOMP_NO_SNAPSHOT_REUSE") && !getenv("LARECOMP_NO_FEEDBACK");
+    }
+    if (!cache || stage != 1 || t == st.rt.depth || tex->type != TEXTYPE_2D ||
+        t->levels > 1 || t->depth > 1 || !feedback_identity_view(stage, tex, t)) return false;
+    bool writes = false, bound = false;
+    for (int i = 0; i < st.rt.ncolor; i++)
+        if (st.rt.color[i] == t && ((pr->fi->out_mask & st.channel_mask) >> (i * 4) & 15)) writes = true;
+    for (int i = 0; i < nfeedback; i++) if (feedback_tex[i] == t && feedback_view[i]) bound = true;
+    if (!writes || !bound) return false;
+    // As in resolve_feedback, queued pixels/resizes must be handled BEFORE the
+    // stamp check. This does not extend the existing snapshot's visibility scope.
+    TexBackend *src = vk_tex(t, true);
+    if (!src) return false;
+    for (int i = 0; i < nsnaps; i++) {
+        Snap *s = &snaps[i];
+        if (s->key == t && s->copy.image && s->copy.image != src->image &&
+            s->visibility == feedback_visibility && s->frame == renderer_present_count() &&
+            s->source_image == src->image && s->copy.width == src->width &&
+            s->copy.height == src->height && s->copy.format == src->format) return true;
+    }
+    return false;
+}
+static VkCliffBatch cliff_batch_try(CmdRec *r, Prog *pr) {
+    VkCliffBatch none = {.draws = 1};
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("XCDE_CLIFF_BATCH"); on = !e || atoi(e) != 0; }
+    if (!on || !pr->cliff_candidate) return none;
+    if (g_debug_frame || g_gpuprof_frame || ck_on() || st.xfb_on || st.raster_discard ||
+        st.nstream != 2 || st.stream[0][1] || st.stream[1][1] != 1 ||
+        st.color_state[0] || st.prim_restart || r->x[0] != 4 || r->x[5] || r->x[6] > 1 ||
+        pr->gi || pr->vi->uses_gmem || pr->fi->uses_gmem || pr->fi->writes_depth)
+        return none;
+    uint32_t stride = st.stream[1][0];
+    if (stride != 52 || st.rt.ncolor != 5 || !st.rt.depth || !st.ds[0] || !st.ds[1] || st.ds[2] != 4)
+        return none;  // (only the measured G-buffer shape)
+    // Tint support is injected into ordinary colour shaders too; only an active
+    // per-instance highlight would make its draw splitting relevant.
+    extern bool pot_glow_active(void);
+    if (pr->fi->uses_tint && pot_glow_active()) return none;
+    bool instance_attr = false;
+    for (int i = 0; i < 32; i++) {
+        if (!(pr->vi->attr_mask & (1u << i))) continue;
+        if (i >= st.nattrib) return none;
+        uint32_t a = st.attrib[i], stream = (a >> 8) & 31;
+        if (stream > 1) return none;
+        if (stream == 1) {
+            // Only the measured float matrix rows and scalar fit this 52-byte record.
+            uint32_t fmt = a & 255, width = fmt == 0x2e ? 16 : fmt == 0x0a ? 4 : 0;
+            if (!width || width > stride || (a >> 13) > stride - width) return none;
+            instance_attr = true;
+        }
+    }
+    if (!instance_attr || st.vbuf[1].addr < HEAP_BASE || st.vbuf[1].addr - HEAP_BASE >= HEAP_MAX ||
+        st.vbuf[1].size > HEAP_MAX - (st.vbuf[1].addr - HEAP_BASE)) return none;
+    VkCliffRange first = {st.vbuf[1].addr, st.vbuf[1].size};
+    VkCliffBatch batch = vk_cliff_batch_scan(r, first, st.stream, 64);
+    if (batch.draws < 2) return none;
+    // Live feedback reads stay per-draw. Only the already resolved, visibility-
+    // scoped colour snapshot can remain constant across a group.
+    for (int stage = 0; stage < 2; stage++) {
+        ShaderInfo *si = stage ? pr->fi : pr->vi;
+        for (int i = 0; i < si->ntex; i++) {
+            if (si->tex[i].is_image || si->tex[i].bindless) return none;
+            NvnTexture *t = shader_texture_object(stage, &si->tex[i]);
+            if (!t) continue;
+            if (naliases && alias_read(t) != t) return none;
+            if (is_attachment(t)) {
+                if (!cliff_feedback_stable(stage, &si->tex[i], t, pr)) return none;
+                continue;
+            }
+            uint64_t tsize = tegra_total_size(&t->layout);
+            if (!tsize) return none;
+            for (int j = -1; j < st.rt.ncolor; j++) {
+                NvnTexture *rt = j < 0 ? st.rt.depth : st.rt.color[j];
+                if (!rt) continue;
+                if (t == rt || t->addr == rt->addr) return none;
+                uint64_t rsize = tegra_total_size(&rt->layout);
+                if (!rsize || (t->addr < rt->addr ? rt->addr - t->addr < tsize : t->addr - rt->addr < rsize)) return none;
+                TexBackend *tb = t->backend, *rb = rt->backend;
+                if (tb && rb && tb->image && tb->image == rb->image) return none;
+            }
+        }
+    }
+    return batch;
+}
+
 static void exec_list(uint64_t handle, int depth) {
     uint64_t p = handle;
     for (int guard = 0; guard < 10000000; guard++) {
@@ -7811,7 +7935,23 @@ static void exec_list(uint64_t handle, int depth) {
             break;
         case CMD_DISPATCH: dispatch_compute((uint32_t)r->x[0], (uint32_t)r->x[1], (uint32_t)r->x[2]); break;
         case CMD_DRAW_ARRAYS: draw(r, false); split_submit(); break;
-        case CMD_DRAW_ELEMENTS: draw(r, true); split_submit(); break;
+        case CMD_DRAW_ELEMENTS:
+            draw(r, true);
+            if (cliff_batch_pending.draws > 1) {  // [XCDE] T-CLIFF-BATCH: the group's commands were executed as one draw
+                uint32_t saved = cliff_batch_pending.draws - 1;
+                st.vbuf[1] = (Range){cliff_batch_pending.last.addr, cliff_batch_pending.last.size};
+                op_counts[CMD_BIND_VERTEX_BUFFERS] += cliff_batch_pending.vertex_binds;
+                op_counts[CMD_BIND_VERTEX_STREAM] += cliff_batch_pending.stream_binds;
+                op_counts[CMD_DRAW_ELEMENTS] += saved;
+                cliff_batch_groups++;
+                cliff_batch_saved += saved;
+                split_since += saved;  // (retain the logical draw budget for bounded submission)
+                split_submit();
+                p = (uint64_t)(uintptr_t)cliff_batch_pending.next;
+                continue;
+            }
+            split_submit();
+            break;
         case CMD_UPDATE_UNIFORM_BUFFER:
             watch_mem_note("inline uniform update", r->x[0] + r->x[2], r->x[3]);
             memcpy((void *)(uintptr_t)(r->x[0] + r->x[2]), x, r->x[3]);
