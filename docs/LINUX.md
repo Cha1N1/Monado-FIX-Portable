@@ -56,3 +56,20 @@ upscaler is just unavailable (`XCDE_NATIVE_FSR=0` skips both).
 Both take linear colour (the prep pass decodes sRGB and the result is encoded again before the HUD) and are fed
 the Halton jitter (`XCDE_TMP_NOJITTER=1` turns it off). `MONADO_FSR3_LIBRARY` / `MONADO_FSR4_LIBRARY` override the
 component paths.
+
+## AppImage (for your own machine)
+
+```bash
+scripts/build_appimage_linux.sh       # build_linux.sh + tools/make_appimage.py -> build/Monado-x86_64.AppImage
+./Monado-x86_64.AppImage /path/to/dump    # launcher; the dump is remembered
+./Monado-x86_64.AppImage --play           # the game directly
+```
+
+The AppImage contains the game code recompiled from **your** dump, so it is for your own use: do not share it
+(CONTRIBUTING.md, art. I). It bundles the launcher, the native FSR components when they were built (with their
+sources and licences) and the non-system libraries; GPU drivers, the Vulkan loader and glibc come from the host
+(build on the oldest distribution you want to run it on). Its mount is read-only, so `xcde.ini`, `cache/`, saves
+and logs live in `~/.local/share/lasrecomp` (or `MONADO_DATA_ROOT`), which gets a `targets` link to the dump and a
+`build/linux/monado` link to the packaged game: the launcher and the game use the same layout as a checkout.
+The dump: the argument, `MONADO_GAME_ROOT`, a `targets/` folder next to the AppImage, or the one used last time.
+Needs [appimagetool](https://github.com/AppImage/appimagetool).

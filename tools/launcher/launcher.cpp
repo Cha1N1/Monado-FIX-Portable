@@ -1368,6 +1368,11 @@ int main(int argc, char **argv) {
 #endif
     if (g_root.size() > 6 && (g_root.compare(g_root.size() - 6, 6, "\\build") == 0 || g_root.compare(g_root.size() - 6, 6, "/build") == 0))
         g_root.resize(g_root.size() - 6);
+#ifndef _WIN32
+    // [XCDE] T-LINUX-APPIMAGE: a read-only package (AppImage) names the writable folder with the same layout instead
+    const char *data_root = getenv("LARECOMP_DATA_ROOT");
+    if (data_root && *data_root) g_root = data_root;
+#endif
     // --shot <file.bmp> [tab] [precompile]: render a few frames of that tab, save the window as a BMP and quit (tests)
     const char *shot = argc > 2 && !strcmp(argv[1], "--shot") ? argv[2] : NULL;
     int shot_tab = argc > 3 ? atoi(argv[3]) : 0, frame_no = 0;
