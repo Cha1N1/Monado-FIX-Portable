@@ -202,9 +202,10 @@ static const char *T(const char *es) {
 struct TList { const char *p[8]; };
 static TList TL(const char *const *a, int n) { TList t{}; for (int i = 0; i < n && i < 8; i++) t.p[i] = T(a[i]); return t; }
 
-static const char *const k_res_ui[] = {"Igual que la ventana (recomendado)", "1x - 720p (como Switch)", "2x - 1440p", "3x - 2160p",
-                                       "75 % de la ventana", "50 % de la ventana", "Dinámica (según objetivo FPS)"};
-static const int k_res_mode[] = {RES_MATCH, 1, 2, 3, RES_Q75, RES_Q50, RES_DYNAMIC};
+static const char *const k_res_ui[] = {"Igual que la ventana (recomendado)", "1x - 720p (como Switch)", "1.5x - 1080p",
+                                       "2x - 1440p", "3x - 2160p", "75 % de la ventana", "50 % de la ventana",
+                                       "Dinámica (según objetivo FPS)"};
+static const int k_res_mode[] = {RES_MATCH, 1, RES_1_5, 2, 3, RES_Q75, RES_Q50, RES_DYNAMIC};
 
 static void ui(void) {
     static bool saved_note;
@@ -228,9 +229,9 @@ static void ui(void) {
             monado_combo(g_settings.ui_lang ? "Aspect ratio" : "Relación de aspecto", &g_settings.aspect, aspects, 2);
             ImGui::SeparatorText(T("Resolución y escalado"));
             int ri = 0;
-            for (int i = 0; i < 7; i++) if (k_res_mode[i] == g_settings.res_mode) ri = i;
-            if (monado_combo(T("Resolución interna"), &ri, TL(k_res_ui, 7).p, 7)) g_settings.res_mode = k_res_mode[ri];
-            if (g_settings.res_mode >= 1 && g_settings.res_mode <= 8)
+            for (int i = 0; i < 8; i++) if (k_res_mode[i] == g_settings.res_mode) ri = i;
+            if (monado_combo(T("Resolución interna"), &ri, TL(k_res_ui, 8).p, 8)) g_settings.res_mode = k_res_mode[ri];
+            if ((g_settings.res_mode >= 1 && g_settings.res_mode <= 8) || g_settings.res_mode == RES_1_5)
                 // [XCDE] GitHub #22: an Nx internal resolution keeps the window's shape only horizontally: in a wider-than-
                 // 16:9 window (16:10, 21:9, 32:9) the fixed line count must stretch to fill it, and the image goes soft.
                 ImGui::TextWrapped(g_settings.ui_lang
