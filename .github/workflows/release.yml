@@ -8,9 +8,9 @@
 #
 # Upscalers: FSR 1 always; FSR 3 (Linux: native component built from AMD's SDK source; Windows: AMD's signed DLL from
 # the official FidelityFX SDK 1.1.4 release); DLSS on Windows (NVIDIA's official Streamline release,
-# tools/install_dlss.py, hash-pinned); FSR 4 Lite (native component on both). FSR 4 Lite's prepared model files can't
-# be made in CI (tools/prepare_fsr4_lite.py needs Linux + Proton): they are downloaded from the release tagged
-# fsr4-lite-assets of this repository when it exists, and the packages are built without them otherwise.
+# tools/install_dlss.py, hash-pinned); the FSR 4 Lite component on both. FSR 4 Lite's model files are NOT packaged:
+# they are derived from AMD's SDK (tools/prepare_fsr4_lite.py, Linux + Proton) and are meant to be prepared on the
+# player's own PC; until then FSR 4 Lite is unavailable in these packages and the runtime falls back to FSR 1.
 name: release
 on:
   workflow_dispatch:
@@ -25,8 +25,6 @@ env:
   APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
   FFX_URL: https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/v1.1.4/FidelityFX-SDK-v1.1.4.zip
   FFX_SHA256: 0216556bfb0e243cec30004a2a98d38f4e3f7406cb7938e3c1b85c758e95d952   # (AMD publishes no digest: measured once)
-  FSR4_ASSETS_TAG: fsr4-lite-assets
-  FSR4_ASSETS_FILE: fsr4-lite-assets.tar.gz
 
 jobs:
   linux:
@@ -67,16 +65,6 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/python -m pip install -q "ziglang==$ZIG_VERSION" capstone==5.0.9 unicorn==2.1.4 lz4==4.4.5 pyinstaller
-      - name: FSR 4 Lite model files (optional)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release download "$FSR4_ASSETS_TAG" -p "$FSR4_ASSETS_FILE" -D build/fsr4-download 2>/dev/null; then
-            mkdir -p build/fsr4/assets && tar -xzf "build/fsr4-download/$FSR4_ASSETS_FILE" -C build/fsr4/assets
-            test -f build/fsr4/assets/provenance.json && echo "FSR 4 Lite model files: included"
-          else
-            echo "::notice::No $FSR4_ASSETS_TAG release: packaging without FSR 4 Lite model files"
-          fi
       - name: Stage the first-start builder
         run: .venv/bin/python tools/gamebuild_stage.py --dest build/gamebuild --platform linux
       - name: Build the release runtime, launcher and upscaler components
@@ -132,19 +120,6 @@ jobs:
         run: |
           python -m venv .venv
           .venv\Scripts\python -m pip install -q "ziglang==$env:ZIG_VERSION" capstone==5.0.9 unicorn==2.1.4 lz4==4.4.5 cmake ninja pyinstaller
-      - name: FSR 4 Lite model files (optional)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release download $env:FSR4_ASSETS_TAG -p $env:FSR4_ASSETS_FILE -D build/fsr4-download 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            New-Item -ItemType Directory -Force build/fsr4/assets | Out-Null
-            tar -xzf "build/fsr4-download/$env:FSR4_ASSETS_FILE" -C build/fsr4/assets
-            "FSR 4 Lite model files: included"
-          } else {
-            "::notice::No $env:FSR4_ASSETS_TAG release: packaging without FSR 4 Lite model files"
-            $global:LASTEXITCODE = 0
-          }
       - name: AMD FSR 3 runtime (official FidelityFX SDK 1.1.4) and NVIDIA DLSS (official Streamline, hash-pinned)
         run: |
           Invoke-WebRequest -Uri $env:FFX_URL -OutFile ffx.zip
@@ -173,8 +148,7 @@ jobs:
         run: .venv\Scripts\python tools/freeze_gamebuild.py --python .venv\Scripts\python.exe
       - name: Package the ZIP (checked with tools/package_guard.py)
         run: |
-          $fsr4 = @(); if (Test-Path build/fsr4/lite) { $fsr4 = @('--with-fsr4-assets') }
-          .venv\Scripts\python tools/make_portable.py "$env:RUNNER_TEMP\Monado-Windows" --release --msys C:\msys64\ucrt64\bin @fsr4
+          .venv\Scripts\python tools/make_portable.py "$env:RUNNER_TEMP\Monado-Windows" --release --msys C:\msys64\ucrt64\bin
           New-Item -ItemType Directory -Force dist | Out-Null
           Compress-Archive -Path "$env:RUNNER_TEMP\Monado-Windows\*" -DestinationPath dist/Monado-Windows-x64.zip
           (Get-FileHash dist/Monado-Windows-x64.zip -Algorithm SHA256).Hash.ToLower() + "  Monado-Windows-x64.zip" |

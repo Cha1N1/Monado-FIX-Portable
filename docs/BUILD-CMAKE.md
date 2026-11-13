@@ -95,4 +95,5 @@ On Windows, stage with `--platform windows --link-file xcde_imports.a` first (th
 executable's exports), use the `windows` preset, and package with `tools/make_portable.py <out> --release`.
 
 `.github/workflows/release.yml` builds both packages with every upscaler: run it by hand, or push a `v*` tag for a
-draft GitHub release. FSR 4 Lite's model files come from a release tagged `fsr4-lite-assets` when one exists.
+draft GitHub release. FSR 4 Lite's model files are not packaged (they are derived from AMD's SDK): without them the
+runtime falls back to FSR 1.
