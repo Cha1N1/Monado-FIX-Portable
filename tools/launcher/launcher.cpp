@@ -952,9 +952,6 @@ static void tab_home() {
     ImGui::TextWrapped("%s",g.ui_lang ? "For modest hardware, start with Potato and a 30 FPS target. Quality and frame rate are independent." :
         "En equipos modestos, empieza con Patata y un objetivo de 30 FPS. La calidad y los FPS se eligen por separado.");
     ImGui::SeparatorText(g.ui_lang ? "Shader preparation" : "Preparación de shaders");
-    ImGui::BeginDisabled(pc_running() || !exists(GAME_EXE) || *g_mismatch_desc);
-    if (ImGui::Button(T("Precompilar shaders"))) pc_start(false);
-    ImGui::EndDisabled();
     static uint64_t checked; static bool prepared;
     if (!checked || SDL_GetTicks()-checked>500) { prepared=pc_done(); checked=SDL_GetTicks(); }
     ImGui::TextWrapped("%s",prepared ? (g.ui_lang ? "Prepared for this executable. New areas can still need additional variants." :
@@ -1452,6 +1449,63 @@ static LONG WINAPI crash_filter(EXCEPTION_POINTERS *e) {
 }
 #endif
 
+// [XCDE] Launcher fonts: body 17 px and headings 34 px at the window's display scale, rasterized at the physical
+// pixel density (HiDPI/Wayland/macOS-style scaling) and drawn back at 1/density. Rebuilt when the window changes scale.
+static ImFont *g_heading_font;
+static void launcher_fonts(ImGuiIO &io, float scale, float density) {
+    io.Fonts->Clear();
+    ImFontConfig cfg; cfg.OversampleH = 2; cfg.OversampleV = 2;
+#ifdef _WIN32
+    static const char *body_files[] = {"C:\\Windows\\Fonts\\segoeui.ttf"};
+    static const char *head_files[] = {"C:\\Windows\\Fonts\\seguisb.ttf", "C:\\Windows\\Fonts\\segoeui.ttf"};
+#else
+    static const char *body_files[] = {"/usr/share/fonts/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+                                       "/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                                       "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"};
+    static const char *head_files[] = {"/usr/share/fonts/noto/NotoSans-SemiBold.ttf", "/usr/share/fonts/truetype/noto/NotoSans-SemiBold.ttf",
+                                       "/usr/share/fonts/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+                                       "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                                       "/usr/share/fonts/liberation/LiberationSans-Bold.ttf"};
+#endif
+    auto add = [&](const char *const *files, size_t n, float px) -> ImFont * {
+        for (size_t i = 0; i < n; i++) { SDL_PathInfo pi; if (SDL_GetPathInfo(files[i], &pi)) return io.Fonts->AddFontFromFileTTF(files[i], px, &cfg); }
+        return nullptr;
+    };
+    ImFont *body = add(body_files, sizeof body_files / sizeof *body_files, 17.0f * scale * density);
+    if (!body) { ImFontConfig d; d.SizePixels = 13.0f * scale * density; body = io.Fonts->AddFontDefault(&d); }
+    ImFont *head = add(head_files, sizeof head_files / sizeof *head_files, 34.0f * scale * density);
+    g_heading_font = head ? head : body;
+    io.FontGlobalScale = 1.0f / density;
+}
+
+// [XCDE] Header banner: original vector scenery (gradient, two ridges, a ring-and-blade emblem). No image assets.
+static void launcher_header(float scale) {
+    ImVec2 hp = ImGui::GetCursorScreenPos();
+    float hw = ImGui::GetContentRegionAvail().x, hh = 132 * scale;
+    ImDrawList *art = ImGui::GetWindowDrawList();
+    art->AddRectFilledMultiColor(hp, ImVec2(hp.x + hw, hp.y + hh),
+        IM_COL32(25,39,52,255), IM_COL32(25,55,66,255), IM_COL32(9,19,27,255), IM_COL32(14,22,33,255));
+    for (int layer = 0; layer < 2; layer++) {
+        ImVec2 ridge[7] = {{hp.x+hw*.54f,hp.y+hh}, {hp.x+hw*.62f,hp.y+hh*.67f}, {hp.x+hw*.70f,hp.y+hh*.80f},
+            {hp.x+hw*.77f,hp.y+hh*(.38f+layer*.14f)}, {hp.x+hw*.87f,hp.y+hh*.68f}, {hp.x+hw,hp.y+hh*.53f}, {hp.x+hw,hp.y+hh}};
+        art->AddConcavePolyFilled(ridge, 7, layer ? IM_COL32(16,30,38,255) : IM_COL32(37,66,75,255));
+    }
+    ImVec2 ring(hp.x + hw - 100 * scale, hp.y + hh * .43f);
+    art->AddCircle(ring, 29*scale, IM_COL32(219,48,76,255), 48, 9*scale);
+    art->AddLine(ImVec2(ring.x+18*scale, ring.y-24*scale), ImVec2(ring.x+39*scale, ring.y-57*scale), IM_COL32(219,48,76,255), 10*scale);
+    art->AddLine(ImVec2(ring.x-16*scale, ring.y+25*scale), ImVec2(ring.x-36*scale, ring.y+59*scale), IM_COL32(219,48,76,255), 6*scale);
+    art->AddCircle(ring, 15*scale, IM_COL32(95,221,230,255), 48, 2*scale);
+    ImGui::SetCursorScreenPos(ImVec2(hp.x + 22*scale, hp.y + 19*scale));
+    ImGui::TextColored(monado_teal(), "%s", g.ui_lang ? "NATIVE PC EDITION" : "EDICIÓN NATIVA PARA PC");
+    ImGui::SetCursorScreenPos(ImVec2(hp.x + 22*scale, ImGui::GetCursorScreenPos().y));
+    ImGui::PushFont(g_heading_font);
+    ImGui::TextUnformatted("MONADO");
+    ImGui::PopFont();
+    ImGui::SetCursorScreenPos(ImVec2(hp.x + 22*scale, ImGui::GetCursorScreenPos().y));
+    ImGui::TextDisabled("Xenoblade Chronicles: Definitive Edition");
+    ImGui::SetCursorScreenPos(ImVec2(hp.x, hp.y + hh + 14*scale));
+}
+
 int main(int argc, char **argv) {
     // root: the folder above the launcher's build/ folder (or the working directory)
     const char *base = SDL_GetBasePath();
@@ -1482,7 +1536,7 @@ int main(int argc, char **argv) {
         llog("SDL_Init with gamepads failed (%s): video only", SDL_GetError());
         if (!SDL_Init(SDL_INIT_VIDEO)) return fail("Could not start SDL (video).");
     }
-    SDL_Window *win = SDL_CreateWindow("Monado - Launcher", 980, 680, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
+    SDL_Window *win = SDL_CreateWindow("Monado - Launcher", 1100, 820, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!win) return fail("Could not create the launcher window.");
     SDL_Renderer *ren = SDL_CreateRenderer(win, NULL);
     if (!ren) {  // (an old or missing graphics driver: the CPU renderer still shows the launcher)
@@ -1497,27 +1551,19 @@ int main(int argc, char **argv) {
     ImGuiIO &io = ImGui::GetIO();
     io.IniFilename = NULL;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
-    float scale = shot && argc>6 ? (float)atof(argv[6]) : SDL_GetWindowDisplayScale(win);
+    // Windows reports the scale as display scale with density 1; Wayland/macOS as pixel density with scale 1.
+    float density = SDL_GetWindowPixelDensity(win);
+    if (density <= 0) density = 1;
+    float scale = shot && argc>6 ? (float)atof(argv[6]) : SDL_GetWindowDisplayScale(win) / density;
     if (scale <= 0) scale = 1;
     g_scale = scale;
-    SDL_SetWindowMinimumSize(win,720,540);
-    SDL_SetWindowSize(win, (int)(980 * scale), (int)(680 * scale));
+    SDL_SetWindowMinimumSize(win,820,620);
+    SDL_SetWindowSize(win, (int)(1100 * scale), (int)(820 * scale));
     if (shot && argc>5) { int h=std::clamp(atoi(argv[5]),540,2160); SDL_SetWindowSize(win,h*16/9,h); }
     SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     if (!shot) SDL_ShowWindow(win);
-#ifdef _WIN32
-    if (!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 17.0f * scale)) io.Fonts->AddFontDefault();
-#else
-    {   // [XCDE] T-LINUX: a common installed sans-serif font, else ImGui's own
-        bool font = false;
-        for (const char *f : {"/usr/share/fonts/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-                              "/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                              "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"})
-            if (!font) { SDL_PathInfo pi; font = SDL_GetPathInfo(f, &pi) && io.Fonts->AddFontFromFileTTF(f, 17.0f * scale); }
-        if (!font) io.Fonts->AddFontDefault();
-    }
-#endif
-    monado_theme(scale);
+    launcher_fonts(io, scale, density);
+    monado_launcher_theme(scale);
     ImGui_ImplSDL3_InitForSDLRenderer(win, ren);
     ImGui_ImplSDLRenderer3_Init(ren);
     load();
@@ -1540,6 +1586,16 @@ int main(int argc, char **argv) {
             if (e.type == SDL_EVENT_QUIT) run = false;
             if (e.type == SDL_EVENT_GAMEPAD_ADDED) SDL_OpenGamepad(e.gdevice.which);
         }
+        if (!shot) {  // the window moved to a monitor with another scale: re-rasterize the fonts and resize the style
+            float nd = SDL_GetWindowPixelDensity(win); if (nd <= 0) nd = 1;
+            float ns = SDL_GetWindowDisplayScale(win) / nd; if (ns <= 0) ns = 1;
+            if (fabsf(nd - density) > 0.01f || fabsf(ns - scale) > 0.01f) {
+                ImGui_ImplSDLRenderer3_DestroyFontsTexture();
+                launcher_fonts(io, ns, nd);
+                ImGui::GetStyle().ScaleAllSizes(ns / scale);
+                scale = ns; density = nd; g_scale = scale;
+            }
+        }
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
@@ -1547,33 +1603,7 @@ int main(int argc, char **argv) {
         ImGui::SetNextWindowPos(vp->WorkPos);
         ImGui::SetNextWindowSize(vp->WorkSize);
         ImGui::Begin("main", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-        ImGui::SetWindowFontScale(1.5f);
-        ImGui::TextColored(monado_rgb(0x59C985), "Monado");
-        ImGui::SetWindowFontScale(1.0f);
-        ImGui::TextDisabled("Xenoblade Chronicles: Definitive Edition");
-        {   // [XCDE] the launcher's own language (Spanish / English), saved with the settings
-            static const char *ll[] = {"Español", "English"};
-            ImGui::SameLine(ImGui::GetContentRegionMax().x - 330 * scale);
-            ImGui::SetNextItemWidth(150 * scale);
-            ImGui::Combo(T("Idioma del launcher"), &g.ui_lang, ll, 2);
-        }
-        float bottom = ImGui::GetFrameHeightWithSpacing() * (pc_running() ? 3.3f : 2.2f);
-
-        ImGui::BeginChild("navigation",ImVec2(164*scale,-bottom),ImGuiChildFlags_Borders);
-        const char *es[]={"Inicio","Gráficos","Controles","Audio e idioma","Mods","Diagnóstico"};
-        const char *en[]={"Home","Graphics","Controls","Audio & language","Mods","Diagnostics"};
-        for (int i=0;i<6;i++) if (ImGui::Selectable(g.ui_lang ? en[i] : es[i],section==i,0,ImVec2(0,32*scale))) section=i;
-        ImGui::Separator();
-        if (ImGui::Button(T("Salir"),ImVec2(-1,0))) run=false;
-        ImGui::EndChild(); ImGui::SameLine();
-        ImGui::BeginChild("content",ImVec2(0,-bottom),ImGuiChildFlags_Borders);
-        ImGui::PushItemWidth(fminf(340*scale,ImGui::GetContentRegionAvail().x*0.60f));
-        switch(section) {
-        case 0: tab_home(); break; case 1: tab_graphics(); break; case 2: tab_controls(); break;
-        case 3: tab_audio(); break; case 4: tab_mods(); break; default: tab_diagnostics(); break;
-        }
-        ImGui::PopItemWidth(); ImGui::EndChild();
-        ImGui::Separator();
+        launcher_header(scale);
 #ifndef _WIN32
         if (g_dump_pending) {
             dump_poll();
@@ -1589,7 +1619,44 @@ int main(int argc, char **argv) {
         ImGui::SetItemTooltip("%s", g.ui_lang ? "The folder with exefs/ and romfs/ (version 2.0.0). Remembered as targets/."
                                               : "La carpeta con exefs/ y romfs/ (versión 2.0.0). Se recuerda como targets/.");
         ImGui::SameLine();
+        ImGui::TextUnformatted(have_game ? (g.ui_lang ? "Game files found" : "Archivos del juego encontrados")
+                                         : (g.ui_lang ? "Select your game files" : "Elige los archivos del juego"));
+        ImGui::SameLine();
 #endif
+        {   // [XCDE] the launcher's own language (Spanish / English), saved with the settings
+            static const char *ll[] = {"Español", "English"};
+            const char *lbl = T("Idioma del launcher");
+            float w = 150 * scale + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(lbl).x;
+            ImGui::SetCursorPosX(fmaxf(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - w));
+            ImGui::SetNextItemWidth(150 * scale);
+            ImGui::Combo(lbl, &g.ui_lang, ll, 2);
+        }
+        float bottom = ImGui::GetFrameHeightWithSpacing() * (pc_running() ? 3.3f : 2.2f) + ImGui::GetStyle().ItemSpacing.y;
+
+        ImGui::BeginChild("navigation",ImVec2(224*scale,-bottom),0,ImGuiWindowFlags_AlwaysUseWindowPadding);
+        ImGui::TextDisabled("%s", g.ui_lang ? "CONFIGURATION" : "CONFIGURACIÓN");
+        ImGui::Spacing();
+        const char *es[]={"Inicio","Gráficos","Controles","Audio e idioma","Mods","Diagnóstico"};
+        const char *en[]={"Home","Graphics","Controls","Audio & language","Mods","Diagnostics"};
+        static int shown_section = -1;
+        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(.50f,.13f,.19f,1));  // the selected page: the crimson accent
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(.65f,.18f,.24f,1));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(.75f,.20f,.26f,1));
+        for (int i=0;i<6;i++) if (ImGui::Selectable(g.ui_lang ? en[i] : es[i],section==i,0,ImVec2(0,38*scale))) section=i;
+        ImGui::PopStyleColor(3);
+        ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+        ImGui::TextColored(monado_teal(), "MONADO");
+        ImGui::TextWrapped("%s", g.ui_lang ? "Your world. Your setup." : "Tu mundo. Tu configuración.");
+        ImGui::EndChild(); ImGui::SameLine();
+        if (shown_section != section) { ImGui::SetNextWindowScroll(ImVec2(0, 0)); shown_section = section; }
+        ImGui::BeginChild("content",ImVec2(0,-bottom),0,ImGuiWindowFlags_AlwaysUseWindowPadding);
+        ImGui::PushItemWidth(fminf(340*scale,ImGui::GetContentRegionAvail().x*0.60f));
+        switch(section) {
+        case 0: tab_home(); break; case 1: tab_graphics(); break; case 2: tab_controls(); break;
+        case 3: tab_audio(); break; case 4: tab_mods(); break; default: tab_diagnostics(); break;
+        }
+        ImGui::PopItemWidth(); ImGui::EndChild();
+        ImGui::Separator();
         if (!have_game) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", T("Faltan los archivos del juego en targets/ (exefs y romfs de tu copia)."));
         else if (!have_exe) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", T("Falta build/xcde.exe (compila el juego primero)."));
         else if (*g_mismatch_desc) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), g.ui_lang ?
@@ -1620,14 +1687,20 @@ int main(int argc, char **argv) {
             if (launched) run = false;
         }
         ImGui::BeginDisabled(!have_game || !have_exe || launched || pc_running() || *g_mismatch_desc);
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.55f, 0.3f, 1));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.7f, 0.4f, 1));
+        ImGui::PushStyleColor(ImGuiCol_Button, monado_crimson());
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.20f, 0.30f, 1));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.96f, 0.30f, 0.38f, 1));
         if (ImGui::Button(T("JUGAR"), ImVec2(200 * scale, 0))) {
             if (!pc_done()) pc_start(true);
             else { launch(); launched = g_launched_ok; if (launched) run = false; }
         }
-        ImGui::PopStyleColor(2);
+        ImGui::PopStyleColor(3);
+        ImGui::EndDisabled();
         ImGui::SameLine();
+        ImGui::BeginDisabled(pc_running() || !have_exe || *g_mismatch_desc);
+        if (ImGui::Button(T("Precompilar shaders"))) pc_start(false);
+        ImGui::SetItemTooltip("%s", g.ui_lang ? "Prepare every shader ahead of time, so new areas don't stop to compile them. Progress is kept."
+                                              : "Prepara todos los shaders por adelantado, para que las zonas nuevas no se paren a compilarlos. El progreso se conserva.");
         ImGui::EndDisabled();
         ImGui::SameLine();
         bool pending=g_mod_dirty || memcmp(&saved_cfg,&g,sizeof g)!=0;
@@ -1635,10 +1708,12 @@ int main(int argc, char **argv) {
             if (save()) { memcpy(&saved_cfg,&g,sizeof g); g_mod_dirty=false; g_status=T("Ajustes guardados en xcde.ini"); }
             else g_status=T("No se pudo escribir xcde.ini");
         }
+        ImGui::SameLine();
+        if (ImGui::Button(T("Salir"))) run=false;
         if (pending) { ImGui::SameLine(); ImGui::TextColored(monado_rgb(0xE4C477),"%s",g.ui_lang ? "Unsaved" : "Sin guardar"); }
         ImGui::End();
         ImGui::Render();
-        SDL_SetRenderDrawColor(ren, 16, 20, 17, 255);
+        SDL_SetRenderDrawColor(ren, 9, 13, 18, 255);
         SDL_RenderClear(ren);
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), ren);
         if (shot && ++frame_no == (shot_pc ? 300 : 5)) {

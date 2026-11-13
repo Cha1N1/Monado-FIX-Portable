@@ -35,3 +35,37 @@ static inline void monado_theme(float scale) {
     c[ImGuiCol_NavCursor]=monado_rgb(0x86DDA8); c[ImGuiCol_PlotHistogram]=monado_rgb(0x59C985);
     s.ScaleAllSizes(scale>0 ? scale : 1);
 }
+// [XCDE] Launcher theme: deep navy panels, one crimson accent (selected page, PLAY) and teal for checkmarks,
+// sliders and small labels. The F1 menu keeps monado_theme().
+static inline ImVec4 monado_teal() { return monado_rgb(0x5FD4DE); }
+static inline ImVec4 monado_crimson() { return monado_rgb(0xBA213B); }
+static inline void monado_launcher_theme(float scale) {
+    ImGui::StyleColorsDark();
+    ImGuiStyle &s=ImGui::GetStyle();
+    s.WindowPadding=ImVec2(22,18); s.FramePadding=ImVec2(12,7);
+    s.ItemSpacing=ImVec2(12,10); s.ItemInnerSpacing=ImVec2(8,6);
+    s.WindowRounding=0; s.ChildRounding=10; s.FrameRounding=6;
+    s.PopupRounding=8; s.ScrollbarRounding=8; s.GrabRounding=4; s.TabRounding=6;
+    s.WindowBorderSize=0; s.ChildBorderSize=0; s.FrameBorderSize=0;
+    auto &c=s.Colors;
+    c[ImGuiCol_WindowBg]=ImVec4(.035f,.05f,.07f,1); c[ImGuiCol_ChildBg]=ImVec4(.06f,.08f,.105f,1);
+    c[ImGuiCol_PopupBg]=ImVec4(.075f,.095f,.12f,1);
+    c[ImGuiCol_Text]=ImVec4(.91f,.94f,.96f,1); c[ImGuiCol_TextDisabled]=ImVec4(.52f,.62f,.69f,1);
+    c[ImGuiCol_Border]=ImVec4(.18f,.24f,.29f,.6f);
+    c[ImGuiCol_FrameBg]=ImVec4(.10f,.14f,.18f,1); c[ImGuiCol_FrameBgHovered]=ImVec4(.15f,.22f,.27f,1);
+    c[ImGuiCol_FrameBgActive]=ImVec4(.19f,.28f,.33f,1);
+    c[ImGuiCol_Button]=ImVec4(.13f,.19f,.23f,1); c[ImGuiCol_ButtonHovered]=ImVec4(.20f,.29f,.34f,1);
+    c[ImGuiCol_ButtonActive]=ImVec4(.26f,.36f,.40f,1);
+    c[ImGuiCol_CheckMark]=c[ImGuiCol_SliderGrab]=ImVec4(.31f,.83f,.89f,1);
+    c[ImGuiCol_SliderGrabActive]=ImVec4(.63f,.96f,1,1);
+    c[ImGuiCol_Header]=ImVec4(.13f,.19f,.23f,1); c[ImGuiCol_HeaderHovered]=ImVec4(.20f,.29f,.34f,1);
+    c[ImGuiCol_HeaderActive]=ImVec4(.26f,.36f,.40f,1);
+    c[ImGuiCol_TabSelected]=ImVec4(.50f,.13f,.19f,1); c[ImGuiCol_TabHovered]=ImVec4(.65f,.18f,.24f,1);
+    c[ImGuiCol_Tab]=ImVec4(.10f,.15f,.19f,1); c[ImGuiCol_TabSelectedOverline]=ImVec4(.31f,.83f,.89f,1);
+    c[ImGuiCol_Separator]=ImVec4(.17f,.25f,.29f,1);
+    c[ImGuiCol_TitleBg]=c[ImGuiCol_TitleBgActive]=ImVec4(.13f,.08f,.11f,1);
+    c[ImGuiCol_TextSelectedBg]=ImVec4(.31f,.83f,.89f,.35f);
+    c[ImGuiCol_NavCursor]=ImVec4(.63f,.96f,1,1);
+    c[ImGuiCol_PlotHistogram]=ImVec4(.28f,.78f,.84f,1);
+    s.ScaleAllSizes(scale>0 ? scale : 1);
+}
