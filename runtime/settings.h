@@ -1,6 +1,7 @@
 // User settings (larecomp.ini next to the executable's working directory), edited from the in-game menu.
 #pragma once
 #include <stdbool.h>
+#include "grass_lod.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -97,6 +98,7 @@ typedef struct {
     int occlusion;       // OCCL_*; occlusion-culling override (restart): auto = off on AMD iGPUs, GitHub #14
     int amd_fix;         // AMD_FIX_*; RDNA 3 glitch mitigation (restart), GitHub #7
     int session_fix;     // SESSION_FIX_*; no async render worker (restart), GitHub #25
+    int grass_lod;       // [XCDE] GRASS_*: grass draw distance, applied on the next guest foliage pass (no restart)
     bool gpu_memory_budget; // use VK_EXT_memory_budget when exposed; informational allocator support
     bool input_rumble;   // [XCDE] hand rumble through to SDL when the game vibrates (hid cmds 201+hid_set.c)
     bool taa_off;        // [XCDE] remove only the game's temporal AA (lib_nx.ini tmaa): xcde.ini taa = 0 (default 1: kept)
