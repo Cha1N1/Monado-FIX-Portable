@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "vk.h"
+#include "vkq.h"  // [XCDE] the ordered recording worker: uploads, copies and barriers queue in order with the draws
 #include "texture_index.h"
 #include "../../settings.h"  // [XCDE] texture filtering option
 #include "shaders.h"
