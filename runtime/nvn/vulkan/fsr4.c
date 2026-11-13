@@ -71,14 +71,26 @@ bool fsr4_available(void) {
     if (!api || api->abi != MONADO_FSR4_ABI || !api->create || !api->build || !api->record || !api->destroy || !api->error) {
         LOG("[fsr4] incompatible native component\n"); fsr4_close(module); api = NULL; return false;
     }
+    // The prepared model files: MONADO_FSR4_ASSET_DIR, <executable folder>/fsr4, then the data folder's fsr4/, where
+    // the launcher's "Prepare FSR 4 Lite" (tools/fsr4_prepare.py) puts them on the player's PC.
     const char *dir = getenv("MONADO_FSR4_ASSET_DIR");
-    static char beside[4096];
-    if (!dir && fsr4_beside_exe(beside, sizeof beside, "fsr4")) dir = beside;  // <executable folder>/fsr4/lite/...
+    static char beside[4096], data_dir[4096];
+    char probe[4300];
+    if (!dir && fsr4_beside_exe(beside, sizeof beside, "fsr4")) {
+        snprintf(probe, sizeof probe, "%s/lite/t1080_m0/initializer.bin", beside);
+        FILE *f = fopen(probe, "rb");
+        if (f) { fclose(f); dir = beside; }
+    }
+    if (!dir) {
+        const char *data = getenv("LARECOMP_DATA_ROOT");
+        snprintf(data_dir, sizeof data_dir, "%s%sfsr4", data && *data ? data : "", data && *data ? "/" : "");
+        dir = data_dir;  // ("fsr4" relative to the working directory, the data folder, without LARECOMP_DATA_ROOT)
+    }
     if (!dir || strlen(dir) >= sizeof(assets)) { LOG("[fsr4] set MONADO_FSR4_ASSET_DIR to the prepared model directory\n"); return false; }
     strcpy(assets,dir);
     static const char *sets[] = {"t1080_m0","t1080_m1","t2160_m0","t2160_m1"};
     for (unsigned i=0;i<4;i++) { char path[4200]; snprintf(path,sizeof(path),"%s/lite/%s/initializer.bin",assets,sets[i]);
-        FILE *f=fopen(path,"rb"); if (!f) { LOG("[fsr4] missing Lite weights: %s\n",path); return false; }
+        FILE *f=fopen(path,"rb"); if (!f) { LOG("[fsr4] missing Lite weights: %s (the launcher's \"Prepare FSR 4 Lite\" makes them)\n",path); return false; }
         fseek(f,0,SEEK_END); long size=ftell(f); fclose(f);
         if(size!=27392) { LOG("[fsr4] invalid Lite weights: %s\n",path); return false; }
     }

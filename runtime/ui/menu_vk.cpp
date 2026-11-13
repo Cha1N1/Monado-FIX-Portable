@@ -257,11 +257,7 @@ static void ui(void) {
             static const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal)", "NVIDIA DLSS (temporal, RTX)",
                                         "AMD FSR 4 Lite (temporal, nativo)"};
             static const int upv[] = {UPSCALE_BILINEAR, UPSCALE_FSR1, UPSCALE_FSR3, UPSCALE_DLSS, UPSCALE_FSR4_LITE};
-#ifdef __linux__
-            const int nups = 5;  // [XCDE] T-FSR4-LITE: the native Linux component
-#else
-            const int nups = 4;
-#endif
+            const int nups = 5;  // [XCDE] T-FSR4-LITE: the native component (Linux and Windows)
             int ui_ = 0;
             for (int i = 0; i < nups; i++) if (upv[i] == g_settings.upscaler) ui_ = i;
             const char *preview = g_settings.upscaler_auto ? (g_settings.ui_lang ? "Automatic (DLSS on supported RTX)" : "Automático (DLSS en RTX compatible)") : T(ups[ui_]);

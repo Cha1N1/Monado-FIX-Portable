@@ -48,6 +48,8 @@ def main():
     ap.add_argument('--appimagetool', default='appimagetool')
     ap.add_argument('--release', action='store_true', help='runtime without game code + the first-start builder')
     ap.add_argument('--gamebuild', type=Path, default=ROOT / 'build/gamebuild', help='staged builder (--release)')
+    ap.add_argument('--fsr4prep', type=Path, default=ROOT / 'build/fsr4prep',
+                    help='FSR 4 Lite preparation tool (tools/build_fsr4prep.py): ships FSR 4 without AMD-derived files')
     a = ap.parse_args()
     build, output = a.build.resolve(), a.output.resolve()
     for name in ('monado', 'monado-launcher'):
@@ -104,6 +106,16 @@ def main():
             shutil.copy2(ROOT / 'runtime/nvn/vulkan/fsr4_api.h', docs / 'fsr4-source/fsr4_api.h')
             shutil.copy2(ROOT / 'scripts/build_fsr4_linux.sh', docs / 'fsr4-source/build_fsr4_linux.sh')
             shutil.copy2(ROOT / 'docs/adr/0012-native-fsr4-lite.md', docs / 'FSR4-LICENSING.md')
+        elif fsr4.is_file() and (a.fsr4prep / 'monado-fsr4prep').is_file():
+            # no model files: the launcher prepares them on the player's PC (AppRun exports XCDE_FSR4PREP_DIR)
+            shutil.copytree(a.fsr4prep.resolve(), share / 'fsr4prep', symlinks=False)
+            for exe in [share / 'fsr4prep/monado-fsr4prep', *(share / 'fsr4prep/bin').iterdir()]:
+                exe.chmod(0o755)
+            shutil.copy2(fsr4, lib / fsr4.name)
+            payloads.append(fsr4)
+            shutil.copytree(ROOT / 'third_party/fsr4_native', docs / 'fsr4-source')
+            shutil.copy2(ROOT / 'runtime/nvn/vulkan/fsr4_api.h', docs / 'fsr4-source/fsr4_api.h')
+            shutil.copy2(ROOT / 'scripts/build_fsr4_linux.sh', docs / 'fsr4-source/build_fsr4_linux.sh')
         else:
             print('note: no FSR 4 Lite component or assets (scripts/build_fsr4_linux.sh, tools/prepare_fsr4_lite.py): '
                   'packaged without it')
