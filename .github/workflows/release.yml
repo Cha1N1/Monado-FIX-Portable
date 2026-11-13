@@ -16,6 +16,7 @@ on:
   workflow_dispatch:
   push:
     tags: ['v*']
+    branches: ['ci/release-test']   # (test-only commit on the fork, not part of the PR)
 permissions:
   contents: write
 env:
