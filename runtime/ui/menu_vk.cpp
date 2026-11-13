@@ -226,7 +226,10 @@ static void ui(void) {
     Settings opening=g_settings, quality_before=g_settings;
     ImGuiViewport *vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->Size.x * 0.5f, vp->Size.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(fminf(vp->Size.x-24,940),fminf(vp->Size.y-24,720)), ImGuiCond_Always);
+    // [XCDE] the font and spacing grow with the output height (font_h: 22 px per 1080 lines), so the window does too:
+    // a fixed 940 x 720 crammed the menu at 1440p / 4K. 1080p and below keep 940 x 720.
+    const float menu_scale = fmaxf(1.0f, vp->Size.y / 1080.0f);
+    ImGui::SetNextWindowSize(ImVec2(fminf(vp->Size.x-24,940*menu_scale),fminf(vp->Size.y-24,720*menu_scale)), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.92f);
     ImGui::Begin(T("Opciones  (F1 / Esc para volver al juego)"), nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
                  ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
