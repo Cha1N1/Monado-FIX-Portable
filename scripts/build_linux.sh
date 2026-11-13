@@ -31,6 +31,14 @@ if [[ $mode == build ]]; then
   "$PYTHON" tools/extract/check_dump.py targets
 fi
 rtdir=build/linux/rt
+# [XCDE] T-LINUX-FSR3 / T-FSR4-LITE: the optional native temporal upscalers, loaded at run time from build/linux/.
+# XCDE_NATIVE_FSR=0 skips them; a failed component build only leaves that upscaler unavailable.
+if [[ ${XCDE_NATIVE_FSR:-1} != 0 ]]; then
+  scripts/build_fsr3_linux.sh || echo 'warning: native FSR 3 not built (needs git, glslangValidator; see third_party/fsr3_native/README.md)' >&2
+  scripts/build_fsr4_linux.sh || echo 'warning: native FSR 4 Lite not built (see third_party/fsr4_native/README.md)' >&2
+  # FSR 4 Lite model assets (tools/prepare_fsr4_lite.py, once) are looked up beside the executable
+  [[ ! -d build/fsr4/assets/lite || -e build/linux/fsr4 ]] || ln -s ../fsr4/assets build/linux/fsr4
+fi
 mkdir -p "$rtdir" build/linux/game build/inc
 python3 tools/gen_smaa_inc.py third_party/smaa/SMAA.hlsl build/inc/smaa_hlsl.inc
 objects=()
@@ -40,7 +48,7 @@ rt=(loader dispatch kernel ipc fnprof platform/linux services/fs services/romfs_
     hle/fibers hle/input hle/party hle/bindings hle/movie hle/framepace host/stubs host/settings_ini host/stubs_gfx
     host/gamelib_static host/main_boot diag/diag diag/sampler diag/watchdog diag/crashdump paths)
 nvn=(astc cmdbuf formats maxwell/translate objects output_scale smaa_data tegra texpatch vulkan/device vulkan/exec
-     vulkan/precompile vulkan/shaders vulkan/textures vulkan/temporal)
+     vulkan/precompile vulkan/shaders vulkan/textures vulkan/temporal vulkan/fsr4)
 for f in "${nvn[@]}"; do rt+=("nvn/$f"); done
 for f in "${rt[@]}"; do
   obj="$rtdir/${f//\//_}.o"

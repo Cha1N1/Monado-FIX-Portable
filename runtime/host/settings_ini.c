@@ -79,7 +79,7 @@ void settings_load(void) {
         } else if (!strcmp(k, "upscaler")) {
             g_settings.upscaler_auto = !strcmp(v, "auto");
             g_settings.upscaler = !strcmp(v, "fsr") ? UPSCALE_FSR1 : !strcmp(v, "fsr3") ? UPSCALE_FSR3
-                                : !strcmp(v, "dlss") ? UPSCALE_DLSS : g_settings.upscaler_auto ? UPSCALE_FSR1 : UPSCALE_BILINEAR;
+                                : !strcmp(v, "fsr4lite") ? UPSCALE_FSR4_LITE : !strcmp(v, "dlss") ? UPSCALE_DLSS : g_settings.upscaler_auto ? UPSCALE_FSR1 : UPSCALE_BILINEAR;
         } else if (!strcmp(k, "upscale_quality")) {
             static const char *q[] = {"native", "quality", "balanced", "performance", "ultra"};
             for (int i = 0; i < 5; i++) if (!strcmp(v, q[i])) g_settings.upscale_quality = i;
@@ -147,9 +147,9 @@ void settings_save(void) {
     fprintf(f, "fullscreen = %d\nwindow = %dx%d\n", g_settings.fullscreen, g_window_w, g_window_h);
     fprintf(f, "aspect = %s\n", g_settings.aspect == ASPECT_ORIGINAL ? "original" : "auto");
     fprintf(f, "resolution = %s\n", g_settings.res_mode >= 0 && g_settings.res_mode <= 12 ? res[g_settings.res_mode] : "match");
-    static const char *up[] = {"bilinear", "bilinear", "fsr", "fsr3", "dlss"};
+    static const char *up[] = {"bilinear", "bilinear", "fsr", "fsr3", "dlss", "fsr4lite"};
     static const char *uq[] = {"native", "quality", "balanced", "performance", "ultra"};
-    fprintf(f, "upscaler = %s\nantialias = %s\n", g_settings.upscaler_auto ? "auto" : up[g_settings.upscaler >= 0 && g_settings.upscaler <= 4 ? g_settings.upscaler : 0],
+    fprintf(f, "upscaler = %s\nantialias = %s\n", g_settings.upscaler_auto ? "auto" : up[g_settings.upscaler >= 0 && g_settings.upscaler <= 5 ? g_settings.upscaler : 0],
             g_settings.antialias == AA_SMAA ? "smaa" : "off");
     fprintf(f, "upscale_quality = %s\nframe_gen = %d\n",
             uq[g_settings.upscale_quality >= 0 && g_settings.upscale_quality <= 4 ? g_settings.upscale_quality : 1], g_settings.frame_gen);

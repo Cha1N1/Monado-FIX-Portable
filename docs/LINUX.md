@@ -32,8 +32,27 @@ The launcher alone: `tools/launcher/build_linux.sh`. Its reports are zipped with
 
 ## Differences from Windows
 
-- DLSS (NVIDIA Streamline) and the FSR 3 DLL are Windows-only: the temporal upscalers fall back to the
-  spatial ones. Everything else (FSR 1, SMAA, the F1 menu, mods, controls) is the same code.
+- DLSS (NVIDIA Streamline) is Windows-only. FSR 3.1 and FSR 4 Lite are native Linux components (below).
+  Everything else (FSR 1, SMAA, the F1 menu, mods, controls) is the same code.
 - Logs go to the terminal or wherever stderr is redirected (the launcher: `build/last_game.log`); started from a
   desktop without either, to `~/.local/share/lasrecomp/lasrecomp.log`.
 - The watchdog (`XCDE_STALL`, `XCDE_WATCHDOG`) samples one PC per guest thread instead of a full host stack.
+
+## Native temporal upscalers (optional)
+
+`scripts/build_linux.sh` also builds two optional components next to the game; if one cannot be built, that
+upscaler is just unavailable (`XCDE_NATIVE_FSR=0` skips both).
+
+- **AMD FSR 3.1** (`build/linux/libmonado_fsr3.so`, `scripts/build_fsr3_linux.sh`): AMD's FSR 3.1.4 upscaler and
+  Vulkan backend from the official SDK 1.1.4 (fetched at build time, pinned commit; needs `git` and
+  `glslangValidator`). `third_party/fsr3_native/compat.h` supplies the float `abs` overloads the SDK expects:
+  without them its Lanczos table was half 1.0 and stationary detail blurred (`tests/native/test_fsr3_temporal.cpp`).
+- **AMD FSR 4 Lite INT8** (`build/linux/libmonado_fsr4.so`, `scripts/build_fsr4_linux.sh`): a native Vulkan
+  implementation of FSR 4.1.2's Lite graph (GPL-2.0-or-later, `third_party/fsr4_native/`, ADR 0012). It needs the
+  Lite model assets, prepared once with `tools/prepare_fsr4_lite.py` from AMD's public SDK 2.4.0 (into
+  `build/fsr4/assets`, linked as `build/linux/fsr4`), or `MONADO_FSR4_ASSET_DIR`. GPU: push descriptors, compute
+  derivatives, VALVE mixed float dot, int8/int16/fp16 and integer dot product (Vulkan 1.3); 4K output at most.
+
+Both take linear colour (the prep pass decodes sRGB and the result is encoded again before the HUD) and are fed
+the Halton jitter (`XCDE_TMP_NOJITTER=1` turns it off). `MONADO_FSR3_LIBRARY` / `MONADO_FSR4_LIBRARY` override the
+component paths.

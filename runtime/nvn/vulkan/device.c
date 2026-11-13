@@ -326,6 +326,27 @@ static void create_device(void) {
     if (legacy) gpl = false; // conservative 1.2 path: no optional 1.3 feature chains
     if (gpl) { ext[n_ext++] = VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME; ext[n_ext++] = VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME; }
     g_vk.gpl = gpl;
+#ifdef __linux__
+    // [XCDE] T-FSR4-LITE: the native Lite INT8 shaders' requirements, enabled only when all are present (Vulkan 1.3 path);
+    // the other upscalers do not need them.
+    bool fsr4_ext = !legacy && has_ext(ep, ne, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) &&
+        has_ext(ep, ne, VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME) &&
+        has_ext(ep, ne, VK_VALVE_SHADER_MIXED_FLOAT_DOT_PRODUCT_EXTENSION_NAME);
+    VkPhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE fsr4_mixed = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MIXED_FLOAT_DOT_PRODUCT_FEATURES_VALVE};
+    VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR fsr4_deriv = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR, .pNext = &fsr4_mixed};
+    if (fsr4_ext) {
+        VkPhysicalDeviceFeatures2 q = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &fsr4_deriv};
+        vkGetPhysicalDeviceFeatures2(g_vk.phys, &q);
+        fsr4_ext = fsr4_deriv.computeDerivativeGroupQuads && fsr4_mixed.shaderMixedFloatDotProductFloat16AccFloat32;
+    }
+    if (fsr4_ext) {
+        ext[n_ext++] = VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME;
+        ext[n_ext++] = VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME;
+        ext[n_ext++] = VK_VALVE_SHADER_MIXED_FLOAT_DOT_PRODUCT_EXTENSION_NAME;
+    }
+#endif
     free(ep);
 
     // features the backend relies on (all present on current desktop drivers)
@@ -455,6 +476,18 @@ static void create_device(void) {
     b->geometryShader = h->geometryShader;  // [XCDE] the game's point-sprite geometry shaders
     b->logicOp = h->logicOp;  // [XCDE] T176: ColorState logic ops (the probe-lighting index map ORs its slots)
     g_vk.logic_op = h->logicOp;
+#ifdef __linux__
+    b->shaderStorageImageExtendedFormats = h->shaderStorageImageExtendedFormats;  // [XCDE] native FSR 3 FP images
+    b->shaderInt16 = h->shaderInt16;  // [XCDE] T-FSR4-LITE
+    if (!legacy) f13.shaderIntegerDotProduct = h13.shaderIntegerDotProduct;
+    {
+        extern bool fsr4_device_ok;
+        fsr4_device_ok = fsr4_ext && b->shaderInt16 && f12.shaderInt8 && f12.shaderFloat16 &&
+            f11.storageBuffer16BitAccess && f12.storageBuffer8BitAccess && f13.shaderIntegerDotProduct;
+        if (fsr4_ext) { fsr4_mixed.pNext = f.pNext; f.pNext = &fsr4_deriv; }
+        LOG("[fsr4] Lite INT8 device features: %s\n", fsr4_device_ok ? "supported" : "unavailable");
+    }
+#endif
     if (!h->shaderInt64) LOG("[vk] warning: no shaderInt64 (64-bit address math in shaders)\n");
     // [XCDE] DLSS (dlss.cpp): Streamline's device extensions, features and queues (after ours, same family)
     uint32_t extra_g = 0, extra_c = 0;

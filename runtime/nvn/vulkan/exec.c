@@ -7013,7 +7013,7 @@ static VkPipeline post_pipeline(const char *fs) {
 // Post image `i` at w x h (RGBA8, kept until the size changes). 0, 1: SMAA edges / weights, 2: SMAA output,
 // 3, 4: FSR EASU / RCAS.
 static TexBackend *post_image(int i, uint32_t w, uint32_t h) {
-    static TexBackend img[6];  // (5: T213 the upscaled scene with the HUD)
+    static TexBackend img[7];  // (5: T213 the upscaled scene with the HUD; 6: the native upscalers' sRGB-encoded output)
     TexBackend *d = &img[i];
     if (d->image && (d->width != w || d->height != h)) {
         vk_views_forget(d);
@@ -7123,6 +7123,15 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
         vk_frame_suspend();
         VkImageView t = tmp_upscale(cb, b, v, cam ? (TexBackend *)tmp_depth_tex->backend : NULL, cam ? &tmp_cam : NULL, tmp_jit,
                                     tmp_dm1, ow, oh);
+#ifdef __linux__
+        if (t && (g_settings.upscaler == UPSCALE_FSR4_LITE || g_settings.upscaler == UPSCALE_FSR3)) {  // [XCDE] linear -> sRGB
+            TexBackend *encoded = post_image(6, ow, oh);
+            float pe[8] = {1.0f / ow, 1.0f / oh};
+            post_pass(cb, "tmp_srgb.frag", &t, 1, encoded, pe, false);
+            vk_full_barrier(cb);
+            t = post_view(encoded);
+        }
+#endif
         VkImageView scene = t ? tmp_hud_scene_view(b->width, b->height) : VK_NULL_HANDLE;
         if (scene) {  // [XCDE] T213: the upscaled scene + what the HUD passes added (render size, bilinear)
             fg_scene = t;

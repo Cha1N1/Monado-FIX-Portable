@@ -164,7 +164,7 @@ static int icons_effective(int sel) {
     return t == SDL_GAMEPAD_TYPE_XBOX360 || t == SDL_GAMEPAD_TYPE_XBOXONE ? 2 :
            t == SDL_GAMEPAD_TYPE_PS3 || t == SDL_GAMEPAD_TYPE_PS4 || t == SDL_GAMEPAD_TYPE_PS5 ? 3 : 1;
 }
-static const char *const k_ups_ini[] = {"bilinear", "fsr", "fsr3", "dlss"};
+static const char *const k_ups_ini[] = {"bilinear", "fsr", "fsr3", "dlss", "fsr4lite"};
 static const char *const k_uq_ini[] = {"native", "quality", "balanced", "performance", "ultra"};
 static const char *const k_wins[] = {"1280x720", "1600x900", "1920x1080", "2560x1440", "3840x2160"};
 static const char *const k_res_ini[] = {"match", "1", "2", "3", "75%", "50%", "dynamic"};
@@ -353,6 +353,7 @@ static const char *const k_en[][2] = {
      "cierre inesperado (sin partidas guardadas ni archivos del juego), para adjuntarlo a un reporte.",
      "Puts in a .zip the logs of the last two sessions, xcde.ini and the latest crash report\n"
      "(no saves or game files), to attach to a bug report."},
+    {"AMD FSR 4 Lite (temporal, nativo)", "AMD FSR 4 Lite (temporal, native)"},
     {"Salir", "Quit"}, {"No se pudo iniciar build/xcde.exe (error ", "Could not start build/xcde.exe (error "},
     {"Juego iniciado. Registro: build/last_game.log", "Game started. Log: build/last_game.log"},
     {"No se pudo iniciar la precompilación (error ", "Could not start the precompilation (error "},
@@ -444,7 +445,7 @@ static void load() {
         else if (!strcmp(k, "aspect")) g.aspect = !strcmp(v, "original") ? ASPECT_ORIGINAL : ASPECT_UNLOCKED;
         else if (!strcmp(k, "window") && (i = find(k_wins, 5, v)) >= 0) g.win = i;
         else if (!strcmp(k, "resolution") && (i = find(k_res_ini, 7, v)) >= 0) g.res = i;
-        else if (!strcmp(k, "upscaler")) { g.upscaler_auto = !strcmp(v, "auto"); g.upscaler = !strcmp(v, "fsr") || g.upscaler_auto ? 1 : !strcmp(v, "fsr3") ? 2 : !strcmp(v, "dlss") ? 3 : 0; }
+        else if (!strcmp(k, "upscaler")) { g.upscaler_auto = !strcmp(v, "auto"); g.upscaler = !strcmp(v, "fsr") || g.upscaler_auto ? 1 : !strcmp(v, "fsr3") ? 2 : !strcmp(v, "dlss") ? 3 : !strcmp(v, "fsr4lite") ? 4 : 0; }
         else if (!strcmp(k, "upscale_quality") && (i = find(k_uq_ini, 5, v)) >= 0) g.uquality = i;
         else if (!strcmp(k, "frame_gen")) g.frame_gen = atoi(v) != 0;
         else if (!strcmp(k, "antialias")) g.smaa = !strcmp(v, "smaa");
@@ -831,10 +832,10 @@ static bool capture_event(const SDL_Event &e) {
 static Settings quality_settings() {
     Settings v{};
     static const int resolutions[]={RES_MATCH,1,2,3,RES_Q75,RES_Q50,RES_DYNAMIC};
-    static const int upscalers[]={UPSCALE_BILINEAR,UPSCALE_FSR1,UPSCALE_FSR3,UPSCALE_DLSS};
+    static const int upscalers[]={UPSCALE_BILINEAR,UPSCALE_FSR1,UPSCALE_FSR3,UPSCALE_DLSS,UPSCALE_FSR4_LITE};
     static const int fps[]={30,60,120,144,165,0};
     v.quality_preset=g.quality_preset; v.gpu_performance=g.gpu_performance;
-    v.res_mode=resolutions[std::clamp(g.res,0,6)]; v.upscaler=upscalers[std::clamp(g.upscaler,0,3)];
+    v.res_mode=resolutions[std::clamp(g.res,0,6)]; v.upscaler=upscalers[std::clamp(g.upscaler,0,4)];
     v.upscaler_auto=g.upscaler_auto; v.antialias=g.smaa ? AA_SMAA : AA_OFF;
     v.upscale_quality=g.uquality;
     v.dof_off=!g.dof; v.game_blur=g.game_blur; v.frame_gen=g.frame_gen;
@@ -844,10 +845,10 @@ static Settings quality_settings() {
 }
 static void quality_from_settings(const Settings &v) {
     static const int resolutions[]={RES_MATCH,1,2,3,RES_Q75,RES_Q50,RES_DYNAMIC};
-    static const int upscalers[]={UPSCALE_BILINEAR,UPSCALE_FSR1,UPSCALE_FSR3,UPSCALE_DLSS};
+    static const int upscalers[]={UPSCALE_BILINEAR,UPSCALE_FSR1,UPSCALE_FSR3,UPSCALE_DLSS,UPSCALE_FSR4_LITE};
     static const int fps[]={30,60,120,144,165,0};
     for (int i=0;i<7;i++) if (resolutions[i]==v.res_mode) g.res=i;
-    for (int i=0;i<4;i++) if (upscalers[i]==v.upscaler) g.upscaler=i;
+    for (int i=0;i<5;i++) if (upscalers[i]==v.upscaler) g.upscaler=i;
     for (int i=0;i<6;i++) if (fps[i]==v.fps) g.fps=i;
     g.quality_preset=v.quality_preset; g.gpu_performance=v.gpu_performance;
     g.upscaler_auto=v.upscaler_auto; g.smaa=v.antialias==AA_SMAA;
@@ -966,12 +967,18 @@ static void tab_graphics() {
     monado_combo(T("Resolución interna"), &g.res, TL(k_res_ui, 7).p, 7);
     ImGui::TextDisabled(T("El juego original renderiza a 720p. Más resolución = imagen más nítida y más carga para la GPU."));
     const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal, cualquier GPU)",
-                         "NVIDIA DLSS (temporal, GPU RTX)"};
+                         "NVIDIA DLSS (temporal, GPU RTX)", "AMD FSR 4 Lite (temporal, nativo)"};
+#ifdef __linux__
+    const int nups = 5;  // [XCDE] T-FSR4-LITE: the native Linux component
+#else
+    const int nups = 4;
+    if (g.upscaler > 3) g.upscaler = 1;
+#endif
     ImGui::SetNextItemWidth(320 * g_scale);
     const char *up_preview = g.upscaler_auto ? (g.ui_lang ? "Automatic (DLSS on supported RTX)" : "Automático (DLSS en RTX compatible)") : T(ups[g.upscaler]);
     if (monado_begin_combo(T("Escalado / antialiasing"), up_preview)) {
         if (ImGui::Selectable(g.ui_lang ? "Automatic (recommended)" : "Automático (recomendado)", g.upscaler_auto)) g.upscaler_auto = true;
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < nups; ++i) {
             ImGui::BeginDisabled(i == 3 && !dlss_candidate);
             if (ImGui::Selectable(T(ups[i]), !g.upscaler_auto && g.upscaler == i)) { g.upscaler_auto = false; g.upscaler = i; }
             ImGui::EndDisabled();
