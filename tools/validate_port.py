@@ -82,7 +82,8 @@ def main():
             '-std=c++17' if cpp else '-std=gnu11', *includes(cpp), ROOT / 'runtime' / source,
             '-o', output / (source.replace('/', '_') + '.o')])
     extra_sources = {
-        'test_settings_roundtrip': ['runtime/host/settings_ini.c'],
+        'test_settings_roundtrip': ['runtime/host/settings_ini.c', 'runtime/hle/graphics.c', 'runtime/hle/foliage_distance.c',
+                                    str(sdk / 'lib/libwinpthread.dll.a')],
         'test_output_scale': ['runtime/nvn/output_scale.c'],
         'test_texture_index': ['-O1', '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections'],
         'test_romfs_cache': ['-O1', '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections', str(sdk / 'lib/libwinpthread.dll.a')],
