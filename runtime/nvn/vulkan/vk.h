@@ -43,7 +43,8 @@ typedef struct {
     VkSemaphore timeline;      // value = last completed submission number
     VkCommandPool pool;        // render thread only
     bool custom_border, divisor, host_import, robust2, logic_op, minmax;
-    bool feedback_loop;  // [XCDE] VK_EXT_attachment_feedback_loop_layout (amd_fix cost, #7): sample an attachment in the draw that writes it
+    bool feedback_loop;  // [XCDE] VK_EXT_attachment_feedback_loop_layout (#7): colour attachments sampled by the draw that writes them
+    bool feedback_local_read;  // [XCDE] #7: VK_KHR_dynamic_rendering_local_read - by-region dependency inside rendering
     bool gpl;  // [XCDE] T188: VK_EXT_graphics_pipeline_library with fast linking (exec.c build_pipeline)
     // [XCDE] FSR 3 frame generation's queues (device.c create_device): present, image acquire, async compute; fam UINT32_MAX: none
     VkQueue fg_queue[3];
