@@ -114,7 +114,8 @@ static void maybe_edit(File *f) {
     // off under FSR 3 / DLSS only left the image without any anti-aliasing at all (our SMAA was dead too, see exec.c
     // post_process). It stays off ONLY when the jitter is revived (XCDE_TMP_JIT_FORCE), the case this rule was written
     // for; tmaa=off below already follows taa_off otherwise.
-    else if ((g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS) && g_settings.taa_off)
+    else if ((g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS || g_settings.upscaler == UPSCALE_FSR4_LITE) &&
+             g_settings.taa_off)
         strcat(edits, "AntiAliasing=off");
     if (g_settings.graphics.value[GFX_SHADOW_MASK] == 1) {  // [XCDE] full-resolution shadow mask (restart)
         if (*edits) strcat(edits, ","); strcat(edits, "shadowHalf=off");

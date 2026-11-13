@@ -14,7 +14,11 @@
 // address across a switch that moves the code to another thread.
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include "../platform/linux_fibers.h"  // [XCDE] T-LINUX
+#endif
 
 #include "../rt.h"
 
@@ -30,12 +34,18 @@ typedef struct HFiber {
 
 #define NBUCKETS 4096
 static HFiber *g_buckets[NBUCKETS];
+#ifdef _WIN32
 static CRITICAL_SECTION g_lock;
 static INIT_ONCE g_once = INIT_ONCE_STATIC_INIT;
 
 static BOOL CALLBACK init_lock(PINIT_ONCE o, PVOID p, PVOID *ctx) { (void)o; (void)p; (void)ctx; InitializeCriticalSection(&g_lock); return TRUE; }
 static void lock(void) { InitOnceExecuteOnce(&g_once, init_lock, NULL, NULL); EnterCriticalSection(&g_lock); }
 static void unlock(void) { LeaveCriticalSection(&g_lock); }
+#else
+static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+static void lock(void) { pthread_mutex_lock(&g_lock); }
+static void unlock(void) { pthread_mutex_unlock(&g_lock); }
+#endif
 
 static unsigned bucket(uint64_t key) { return (unsigned)((key >> 4) * 0x9E3779B1u) % NBUCKETS; }
 static HFiber *find(uint64_t key) {

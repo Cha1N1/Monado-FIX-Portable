@@ -69,6 +69,148 @@ def _scene_aspect(gen, addr):
 PATCHES[0x70006f7ea0] = Patch(0xbd04c264, _scene_aspect, 'T265', 'store scene projection aspect')
 
 
+# [XCDE] Grass draw distance presets (runtime/hle/foliage_distance.c, foliage_pool.c).
+# T-FOLIAGE-DISTANCE: apply the preset's separate MPF visibility and shading
+# ranges. Original retains High shading at 1x visibility; Low halves visibility.
+# Only bounded authored local ranges change; the broad
+# 7000/8000 fallback, terrain/tree/cliff LODs and instance placement stay intact.
+def _foliage_fade(gen, addr):
+    ins = gen.lift(addr)
+    if ins.kind != 'op':
+        raise ValueError('foliage fade patch needs a plain instruction')
+    return ('{ extern float xcde_foliage_shading_distance(float, float); '
+            'float near_, far_; uint32_t bits_; '
+            'memcpy(&near_, &c->v[0], 4); memcpy(&far_, &c->v[1], 4); '
+            'far_ = xcde_foliage_shading_distance(near_, far_); '
+            'memcpy(&bits_, &far_, 4); c->v[1] = bits_; } ' + ins.code)
+
+
+def _foliage_radius(gen, addr):
+    ins = gen.lift(addr)
+    if ins.kind != 'op':
+        raise ValueError('foliage radius patch needs a plain instruction')
+    return (ins.code + ' { extern float xcde_foliage_distance(float, float); '
+            'float radius_; uint32_t bits_; memcpy(&radius_, &c->v[8], 4); '
+            'radius_ = xcde_foliage_distance(0.f, radius_); '
+            'memcpy(&bits_, &radius_, 4); c->v[8] = bits_; }')
+
+
+PATCHES[0x7000655ab0] = Patch(0xbd0023e0, _foliage_fade, 'T-FOLIAGE-DISTANCE',
+                          'str s0, [sp, #0x20] - extend MPF material far fade')
+for _site in (0x7000655e80, 0x7000655f8c):
+    PATCHES[_site] = Patch(0xbd400908, _foliage_radius, 'T-FOLIAGE-DISTANCE',
+                          'ldr s8, [x8, #8] - extend MPF CPU patch-selection radius')
+
+# The type-3 default selector discards that input and loads a fixed 50-unit
+# radius for its 5-unit cells. Scale AFTER this replacement as well; otherwise
+# increasing the upstream radius leaves this grass edge unchanged. The original
+# load still executes and is scaled once, rather than multiplying its caller's
+# already-expanded radius again.
+PATCHES[0x7000659ca8] = Patch(0xbd4a71a8, _foliage_radius, 'T-FOLIAGE-DISTANCE',
+                          'ldr s8, [x13, #0xa70] - extend fixed 50-unit foliage radius')
+
+
+# Commit a live request once for the whole serial foliage pass. Reuse the
+# game's all-groups rebuild and material-upload paths; never clear live pools.
+PATCHES[0x700067ea80] = Patch(0xa9bc5ff8, _hook_then_original('xcde_foliage_begin'),
+                          'T-FOLIAGE-LIVE', 'stp x24, x23, [sp, #-0x40]! - foliage pass boundary')
+
+
+def _foliage_live_selection(gen, addr):
+    ins = gen.lift(addr)
+    if ins.kind != 'op':
+        raise ValueError('foliage refresh patch needs a plain instruction')
+    return ('{ extern void xcde_foliage_refresh_selection(Cpu *c); '
+            'xcde_foliage_refresh_selection(c); } ' + ins.code)
+
+
+def _foliage_live_materials(gen, addr):
+    return ('{ extern void f_70006d8fd0(Cpu *c); '
+            'extern _Bool xcde_foliage_refreshing(void); '
+            'c->x[30] = 0x700067eae8ull; f_70006d8fd0(c); '
+            'if (xcde_foliage_refreshing()) c->x[0] |= 1; }')
+
+
+PATCHES[0x7000655d30] = Patch(0xd10243ff, _foliage_live_selection, 'T-FOLIAGE-LIVE',
+                          'sub sp, sp, #0x90 - refresh cached stationary foliage selection')
+PATCHES[0x700067eae4] = Patch(0x9401693b, _foliage_live_materials, 'T-FOLIAGE-LIVE',
+                          'bl f_70006d8fd0 - request normal material upload after live change')
+
+
+# T-FOLIAGE-STREAMING: high presets exhausted the authored 3.5 MiB patch pool.
+# Provision the complete contiguous native allocation for supported 3x live coverage.
+# Keep the bitmap, free-list pool, metadata and scratch/table offsets coherent;
+# no live pool is resized, reset or freed outside the guest's normal lifetime.
+def _foliage_pool(reg, part, base=False):
+    def emit(gen, addr):
+        ins = gen.lift(addr)
+        if ins.kind != 'op': raise ValueError('foliage layout requires a plain instruction')
+        return (ins.code + ' { extern uint32_t xcde_foliage_pool_layout(int part); '
+                f'c->x[{reg}] = ' + ('c->x[0] + ' if base else '') +
+                f'xcde_foliage_pool_layout({part}); }}')
+    return emit
+for _site, _word, _reg, _part, _base in (
+    (0x700068751c, 0xb81a03a8, 1, 0, False),
+    (0x7000687524, 0x91400808, 8, 1, True),
+    (0x700068752c, 0x914e8808, 8, 2, True),
+    (0x7000687538, 0x72a00748, 8, 3, False),
+    (0x7000687544, 0x914e0809, 9, 4, True),
+    (0x7000687580, 0x320d0bea, 10, 5, False),
+):
+    PATCHES[_site] = Patch(_word, _foliage_pool(_reg, _part, _base), 'T-FOLIAGE-STREAMING',
+                           'coherent MPF bitmap/pool allocation for all live grass presets')
+
+
+# The game's fixed map heap cannot hold 3x coverage. Own a bounded private
+# guest-address arena and release it at the original MPF destructor boundary.
+def _foliage_allocate(gen, addr):
+    return ('{ extern uint64_t xcde_foliage_pool_alloc(uint64_t owner); '
+            'c->x[30]=0x7000687524ull; c->x[0]=xcde_foliage_pool_alloc(c->x[19]); }')
+def _foliage_release(gen, addr):
+    return ('{ extern void xcde_foliage_pool_free(uint64_t address); '
+            'c->x[30]=0x7000687718ull; xcde_foliage_pool_free(c->x[0]); }')
+PATCHES[0x7000687520] = Patch(0x97fdbb78, _foliage_allocate, 'T-FOLIAGE-STREAMING',
+                           'allocate MPF scratch/pool outside the fixed map heap')
+PATCHES[0x7000687714] = Patch(0x97fdbb2b, _foliage_release, 'T-FOLIAGE-STREAMING',
+                           'release MPF private storage on native destruction')
+
+
+# [XCDE] Follower footsteps above 30 FPS: keep the normal marker eligibility
+# check, then reject repeated follower foot contacts across locomotion
+# animation restarts (runtime/hle/party.c xcde_footstep_marker).
+def _footstep_marker(gen, addr):
+    return ('{ extern _Bool xcde_footstep_marker(Cpu *c, uint64_t action, uint64_t marker); '
+            'if (!(c->x[0] & 1) || !xcde_footstep_marker(c, c->x[20], c->x[19])) '
+            'goto L_70003f4c5c; }')
+
+
+PATCHES[0x70003f4c0c] = Patch(0x36000280, _footstep_marker, 'T-FOOTSTEP-TIMING',
+                              'tbz w0, #0 - follower foot marker replay guard')
+
+
+# [XCDE] Menu hold/repeat timers above 30 FPS. f_7000578b50 advanced every pad
+# hold/repeat timer by the fixed simulation step at UpdateInfo+4 (1/30 s), once
+# per presented frame, so at 120 FPS a short tap repeated and held directions
+# scrolled 4x too fast. UpdateInfo+8 already holds the elapsed seconds of the
+# frame (+12 is elapsed authored frames). Use it only for these 27 timer loads;
+# button edge detection, input polling and layout rendering stay intact.
+def _menu_input_elapsed(gen, addr):
+    return '{ uint64_t ea = c->x[20] + 8; c->v[1] = LD32(ea); }'
+
+
+_MENU_HOLD_TIME_LOADS = (
+    0x7000578ebc, 0x7000578eec, 0x7000578f18, 0x7000578f44,
+    0x7000578f70, 0x7000578f9c, 0x7000578fc8, 0x7000578ff4,
+    0x7000579020, 0x700057904c, 0x7000579078, 0x70005790a4,
+    0x70005790d0, 0x70005790fc, 0x7000579128, 0x7000579154,
+    0x7000579180, 0x70005791ac, 0x70005791d8, 0x7000579204,
+    0x7000579230, 0x700057925c, 0x7000579288, 0x70005792b4,
+    0x70005792e0, 0x7000579308, 0x70005793b4,
+)
+for _site in _MENU_HOLD_TIME_LOADS:
+    PATCHES[_site] = Patch(0xbd400681, _menu_input_elapsed, 'T-MENU-INPUT',
+                           'ldr s1, [x20, #4] -> elapsed seconds at +8 for menu hold timers')
+
 # [XCDE] Graphics options (runtime/hle/graphics.c, graphics_options.h, prop_lod.h).
 # T-GRAPHICS-SCALABILITY: f_70006b24e0 has just copied the complete 0x1220
 # render configuration. Invalidate any previous per-view overlay backup.

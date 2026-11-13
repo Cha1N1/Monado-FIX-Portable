@@ -20,6 +20,7 @@
 extern "C" {
 #include "../nvn/vulkan/vk.h"
 #include "../settings.h"
+#include "../hle/foliage_distance.h"
 #include "../graphics_options.h"
 #include "menu.h"
 bool vk_imgui_backend_init(void);
@@ -165,6 +166,7 @@ static void feed(ImGuiIO &io, uint32_t w, uint32_t h) {
 // [XCDE] the menu's language follows the launcher's (xcde.ini launcher_lang; g_settings.ui_lang 1 = English): the
 // Spanish text is the key, T() gives the English one.
 static const char *const k_en[][2] = {
+    {"AMD FSR 4 Lite (temporal, nativo)", "AMD FSR 4 Lite (temporal, native)"},  // [XCDE] T-FSR4-LITE
     {"Igual que la ventana (recomendado)", "Match the window (recommended)"}, {"1x - 720p (como Switch)", "1x - 720p (like Switch)"},
     {"75 % de la ventana", "75 % of the window"}, {"50 % de la ventana", "50 % of the window"},
     {"Dinámica (según objetivo FPS)", "Dynamic (follows FPS target)"}, {"Opciones  (F1 / Esc para volver al juego)", "Options  (F1 / Esc to go back to the game)"},
@@ -194,6 +196,17 @@ static const char *const k_en[][2] = {
     {"Estos cambios requieren reiniciar el juego.", "These changes require restarting the game."},
     {"Memoria local reportada", "Reported local memory"}, {"Memoria compartida / no local", "Shared / non-local memory"},
     {"Guardar", "Save"}, {"Volver al juego", "Back to the game"}, {"Guardado en xcde.ini", "Saved to xcde.ini"},
+    {"Presupuesto de memoria (VMA / controlador)", "Memory budget (VMA / driver)"},
+    {"GPU integrada: la memoria del sistema es compartida; el tamaño del heap Vulkan no equivale a VRAM dedicada.",
+     "Integrated GPU: system memory is shared; the Vulkan heap size is not dedicated VRAM."},
+    {"Selección y compatibilidad (al reiniciar)", "Selection and compatibility (after a restart)"},
+    {"Culling por oclusión (al reiniciar)", "Occlusion culling (after a restart)"},
+    {"Fix de parpadeo AMD (al reiniciar)", "AMD flicker fix (after a restart)"},
+    {"Compatibilidad de sesión larga (al reiniciar)", "Long-session compatibility (after a restart)"},
+    {"Automático (AMD integrada: apagada)", "Automatic (AMD integrated: off)"},
+    {"Automático (RDNA 3: activado)", "Automatic (RDNA 3: on)"},
+    {"Automático (activado)", "Automatic (on)"},
+    {"Desactivada", "Off"}, {"Desactivado", "Off"}, {"Activada", "On"}, {"Activado", "On"},
 };
 static const char *T(const char *es) {
     if (g_settings.ui_lang != 1) return es;
@@ -203,9 +216,10 @@ static const char *T(const char *es) {
 struct TList { const char *p[8]; };
 static TList TL(const char *const *a, int n) { TList t{}; for (int i = 0; i < n && i < 8; i++) t.p[i] = T(a[i]); return t; }
 
-static const char *const k_res_ui[] = {"Igual que la ventana (recomendado)", "1x - 720p (como Switch)", "2x - 1440p", "3x - 2160p",
-                                       "75 % de la ventana", "50 % de la ventana", "Dinámica (según objetivo FPS)"};
-static const int k_res_mode[] = {RES_MATCH, 1, 2, 3, RES_Q75, RES_Q50, RES_DYNAMIC};
+static const char *const k_res_ui[] = {"Igual que la ventana (recomendado)", "1x - 720p (como Switch)", "1.5x - 1080p",
+                                       "2x - 1440p", "3x - 2160p", "75 % de la ventana", "50 % de la ventana",
+                                       "Dinámica (según objetivo FPS)"};
+static const int k_res_mode[] = {RES_MATCH, 1, RES_1_5, 2, 3, RES_Q75, RES_Q50, RES_DYNAMIC};
 
 static void ui(void) {
     static bool saved_note;
@@ -229,22 +243,28 @@ static void ui(void) {
             monado_combo(g_settings.ui_lang ? "Aspect ratio" : "Relación de aspecto", &g_settings.aspect, aspects, 2);
             ImGui::SeparatorText(T("Resolución y escalado"));
             int ri = 0;
-            for (int i = 0; i < 7; i++) if (k_res_mode[i] == g_settings.res_mode) ri = i;
-            if (monado_combo(T("Resolución interna"), &ri, TL(k_res_ui, 7).p, 7)) g_settings.res_mode = k_res_mode[ri];
-            if (g_settings.res_mode >= 1 && g_settings.res_mode <= 8)
+            for (int i = 0; i < 8; i++) if (k_res_mode[i] == g_settings.res_mode) ri = i;
+            if (monado_combo(T("Resolución interna"), &ri, TL(k_res_ui, 8).p, 8)) g_settings.res_mode = k_res_mode[ri];
+            if ((g_settings.res_mode >= 1 && g_settings.res_mode <= 8) || g_settings.res_mode == RES_1_5)
                 // [XCDE] GitHub #22: an Nx internal resolution keeps the window's shape only horizontally: in a wider-than-
                 // 16:9 window (16:10, 21:9, 32:9) the fixed line count must stretch to fill it, and the image goes soft.
                 ImGui::TextWrapped(g_settings.ui_lang
                     ? "An Nx resolution keeps the Switch's line count: in windows wider or taller than 16:9 it is stretched. \"Same as the window\" stays sharp."
                     : "Una resolución Nx mantiene las líneas de la Switch: en ventanas m\xC3\xA1s anchas o altas que 16:9 se estira. \xC2\xABIgual que la ventana\xC2\xBB lo mantiene n\xC3\xADtido.");
-            static const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal)", "NVIDIA DLSS (temporal, RTX)"};
-            static const int upv[] = {UPSCALE_BILINEAR, UPSCALE_FSR1, UPSCALE_FSR3, UPSCALE_DLSS};
+            static const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal)", "NVIDIA DLSS (temporal, RTX)",
+                                        "AMD FSR 4 Lite (temporal, nativo)"};
+            static const int upv[] = {UPSCALE_BILINEAR, UPSCALE_FSR1, UPSCALE_FSR3, UPSCALE_DLSS, UPSCALE_FSR4_LITE};
+#ifdef __linux__
+            const int nups = 5;  // [XCDE] T-FSR4-LITE: the native Linux component
+#else
+            const int nups = 4;
+#endif
             int ui_ = 0;
-            for (int i = 0; i < 4; i++) if (upv[i] == g_settings.upscaler) ui_ = i;
+            for (int i = 0; i < nups; i++) if (upv[i] == g_settings.upscaler) ui_ = i;
             const char *preview = g_settings.upscaler_auto ? (g_settings.ui_lang ? "Automatic (DLSS on supported RTX)" : "Automático (DLSS en RTX compatible)") : T(ups[ui_]);
             if (monado_begin_combo(T("Escalado / antialiasing"), preview)) {
                 if (ImGui::Selectable(g_settings.ui_lang ? "Automatic (restart)" : "Automático (reiniciar)", g_settings.upscaler_auto)) g_settings.upscaler_auto = true;
-                for (int i = 0; i < 4; ++i) {
+                for (int i = 0; i < nups; ++i) {
                     bool unavailable = i == 3 && !dlss_available();
                     ImGui::BeginDisabled(unavailable);
                     if (ImGui::Selectable(T(ups[i]), !g_settings.upscaler_auto && ui_ == i)) { g_settings.upscaler_auto = false; g_settings.upscaler = upv[i]; }
@@ -253,7 +273,17 @@ static void ui(void) {
                 }
                 ImGui::EndCombo();
             }
-            if (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS) {
+            if (g_settings.upscaler == UPSCALE_FSR1 || g_settings.upscaler == UPSCALE_FSR3) {  // [XCDE] RCAS strength, live
+                float sharp = xcde_sharpness(&g_settings);
+                if (ImGui::SliderFloat(g_settings.ui_lang ? "Sharpening (RCAS)" : "Nitidez (RCAS)", &sharp, 0.0f, 1.0f, "%.2f"))
+                    g_settings.upscale_sharpness = sharp;
+                ImGui::SetItemTooltip("%s", g_settings.ui_lang ? "0 = off, 1 = maximum. Applies at once." : "0 = desactivada, 1 = máxima. Se aplica al instante.");
+                if (g_settings.upscale_sharpness >= 0.0f) {
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton(g_settings.ui_lang ? "Default" : "Predeterminada")) g_settings.upscale_sharpness = -1.0f;
+                }
+            }
+            if (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS || g_settings.upscaler == UPSCALE_FSR4_LITE) {
                 static const char *uq[] = {"Nativo (solo antialiasing)", "Calidad (67 %)", "Equilibrado (59 %)", "Rendimiento (50 %)",
                                            "Ultra rendimiento (33 %)"};
                 monado_combo(T("Calidad del escalado"), &g_settings.upscale_quality, TL(uq, 5).p, 5);
@@ -269,6 +299,26 @@ static void ui(void) {
             ImGui::Checkbox(T("Antialiasing y desenfoque de movimiento del juego (al reiniciar)"), &g_settings.game_blur);
             bool taa = !g_settings.taa_off;
             if (ImGui::Checkbox(T("Antialiasing temporal (TAA) del juego (al reiniciar)"), &taa)) g_settings.taa_off = !taa;
+            {   // [XCDE] grass draw distance: applied on the next foliage pass, no restart
+                const char *const *labels = g_settings.ui_lang ? grass_lod_labels : grass_lod_labels_es;
+                float grass_scale = xcde_foliage_requested_scale();
+                int grass_choice = grass_lod_from_scale(grass_scale);
+                char custom_grass[48];
+                snprintf(custom_grass, sizeof custom_grass, g_settings.ui_lang ? "Custom (%.2fx)" : "Personalizada (%.2fx)", grass_scale);
+                if (ImGui::BeginCombo(g_settings.ui_lang ? "Grass distance" : "Distancia de la hierba",
+                                      grass_choice < 0 ? custom_grass : labels[grass_choice])) {
+                    for (int i = 0; i < GRASS_PRESET_COUNT; ++i) {
+                        if (ImGui::Selectable(labels[i], i == grass_choice)) { g_settings.grass_lod = i; xcde_foliage_set_preset(i); }
+                        if (i == grass_choice) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip("%s", g_settings.ui_lang
+                    ? "Applies while playing, without restarting. Higher settings keep grass visible farther away and cost FPS.\n"
+                      "Original keeps High's nearby detail at the game's original distance. Low halves grass reach."
+                    : "Se aplica mientras juegas, sin reiniciar. Los valores altos mantienen la hierba visible más lejos y cuestan FPS.\n"
+                      "Original conserva el detalle cercano de Alta a la distancia original del juego. Baja reduce el alcance a la mitad.");
+            }
             ImGui::Checkbox(g_settings.ui_lang ? "On-screen FPS counter" : "Contador FPS en pantalla", &g_settings.fps_overlay);
             ImGui::Checkbox(T("Mostrar FPS en la barra de título"), &g_settings.show_fps);
             ImGui::SeparatorText(g_settings.ui_lang ? "Shadows, detail and effects" : "Sombras, detalle y efectos");  // [XCDE]

@@ -23,6 +23,7 @@
 #include "../../runtime/ui/gpu_picker.h"
 #include "../../runtime/ui/theme.h"
 #include "../../runtime/ui/quality_controls.h"
+#include "../../runtime/grass_lod.h"
 #include "../../runtime/graphics_options.h"
 // [XCDE] GitHub #18: the build ids of the game NSOs this exe's code was lifted from (gen.py writes these
 // with the functions). Older checkouts without them build fine, just without the version check below.
@@ -35,6 +36,19 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#define GAME_EXE "build/xcde.exe"
+#else
+// [XCDE] T-LINUX: the same launcher on Linux. The game is build/linux/monado (scripts/build_linux.sh); processes are
+// started with posix_spawn, folders and messages go through SDL3.
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/resource.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char **environ;
+#define GAME_EXE "build/linux/monado"
 #endif
 
 // ------------------------------------------------------------------ settings (same keys as settings_ini.c)
@@ -101,6 +115,7 @@ struct Cfg {
     unsigned effects_off=0;
     int gpu_profile = 0, gpu_gpl = -1;
     int occlusion = -1;     // [XCDE][FSR3] -1 automatic (off on AMD iGPUs), 0 off, 1 on (xcde.ini occlusion)
+    int grass_lod = GRASS_DEFAULT;  // [XCDE] grass draw distance preset (xcde.ini grass_lod)
     int amd_fix = -1;       // issue #7: -1 automatic (on for AMD RDNA 3), 0 off, 1 on (xcde.ini amd_fix)
     GraphicsOptions graphics = {};  // [XCDE] graphics options (xcde.ini keys in graphics_options.h)
     int session_fix = -1;   // issue #25: -1 automatic (worker stays on), 0 off, 1 on = no async render worker (xcde.ini session_fix)
@@ -110,6 +125,7 @@ struct Cfg {
     int win = 0;            // index into k_wins
     int res = 0;            // index into k_res
     int upscaler = 1;       // 0 bilinear, 1 FSR 1, 2 FSR 3.1, 3 DLSS
+    float sharpness = -1.0f;  // [XCDE] RCAS strength 0..1; < 0: each upscaler's default (xcde.ini upscale_sharpness)
     int uquality = 1;       // FSR 3 / DLSS: 0 native AA, 1 quality, 2 balanced, 3 performance, 4 ultra performance
     bool frame_gen = false;
     bool smaa = false;
@@ -153,12 +169,13 @@ static int icons_effective(int sel) {
     return t == SDL_GAMEPAD_TYPE_XBOX360 || t == SDL_GAMEPAD_TYPE_XBOXONE ? 2 :
            t == SDL_GAMEPAD_TYPE_PS3 || t == SDL_GAMEPAD_TYPE_PS4 || t == SDL_GAMEPAD_TYPE_PS5 ? 3 : 1;
 }
-static const char *const k_ups_ini[] = {"bilinear", "fsr", "fsr3", "dlss"};
+static const char *const k_ups_ini[] = {"bilinear", "fsr", "fsr3", "dlss", "fsr4lite"};
 static const char *const k_uq_ini[] = {"native", "quality", "balanced", "performance", "ultra"};
 static const char *const k_wins[] = {"1280x720", "1600x900", "1920x1080", "2560x1440", "3840x2160"};
-static const char *const k_res_ini[] = {"match", "1", "2", "3", "75%", "50%", "dynamic"};
-static const char *const k_res_ui[] = {"Igual que la ventana (recomendado)", "1x - 720p (como Switch)", "2x - 1440p",
-                                       "3x - 2160p (4K)", "75% de la ventana", "50% de la ventana", "Dinámica (según rendimiento)"};
+static const char *const k_res_ini[] = {"match", "1", "1.5", "2", "3", "75%", "50%", "dynamic"};
+static const char *const k_res_ui[] = {"Igual que la ventana (recomendado)", "1x - 720p (como Switch)", "1.5x - 1080p",
+                                       "2x - 1440p", "3x - 2160p (4K)", "75% de la ventana", "50% de la ventana",
+                                       "Dinámica (según rendimiento)"};
 static const char *const k_fps_ini[] = {"30", "60", "120", "144", "165", "unlimited"};
 static const char *const k_lang_ini[] = {"auto", "en-US", "es", "fr", "de", "it", "ja", "ko", "zh-Hans", "zh-Hant"};
 static const char *const k_lang_ui[] = {"Inglés (por defecto)", "Inglés", "Español", "Francés", "Alemán", "Italiano", "Japonés", "Coreano", "Chino simplificado", "Chino tradicional"};
@@ -342,6 +359,7 @@ static const char *const k_en[][2] = {
      "cierre inesperado (sin partidas guardadas ni archivos del juego), para adjuntarlo a un reporte.",
      "Puts in a .zip the logs of the last two sessions, xcde.ini and the latest crash report\n"
      "(no saves or game files), to attach to a bug report."},
+    {"AMD FSR 4 Lite (temporal, nativo)", "AMD FSR 4 Lite (temporal, native)"},
     {"Salir", "Quit"}, {"No se pudo iniciar build/xcde.exe (error ", "Could not start build/xcde.exe (error "},
     {"Juego iniciado. Registro: build/last_game.log", "Game started. Log: build/last_game.log"},
     {"No se pudo iniciar la precompilación (error ", "Could not start the precompilation (error "},
@@ -356,6 +374,23 @@ static const char *const k_en[][2] = {
     {"No se pudo crear el reporte (falta tar.exe de Windows)", "Could not create the report (Windows' tar.exe is missing)"},
     {"No se pudo crear el reporte", "Could not create the report"}, {"Reporte creado: ", "Report created: "},
     {" (adjúntalo al reportar el problema)", " (attach it to the bug report)"},
+    {"Vibración del mando", "Gamepad vibration"},
+    {"Activa el motor del mando cuando el juego manda vibración (por ejemplo en combate).\n"
+     "También se puede cambiar dentro del juego, en el menú, pestaña Controles.",
+     "Turns on the controller's motor when the game sends vibration (for example in battle).\n"
+     "It can also be changed in the game, in the menu's Controls tab."},
+    {"Resuelve lo que se ve tras el suelo / el suelo que desaparece con FSR 3 en algunas GPUs.\n"
+     "Automático: solo lo apaga en las gráficas integradas AMD donde falla.",
+     "Resolves what is seen behind the floor / the floor disappearing with FSR 3 on some GPUs.\n"
+     "Automatic: only turns it off on AMD integrated graphics where it fails."},
+    {"Puntos de color de 1-2 px en gráficas AMD RDNA 3 (issue #7).\n"
+     "Automático: solo se activa en RDNA 3. Desactivado si te baja el rendimiento.",
+     "1-2 px colour dots on AMD RDNA 3 graphics (issue #7).\n"
+     "Automatic: only enabled on RDNA 3. Turn it off if performance drops."},
+    {"Evita que modelos y texturas se corrompan en partidas largas.\n"
+     "Desactiva el hilo de render asíncrono (algo menos de rendimiento).",
+     "Prevents models and textures from corrupting in long sessions.\n"
+     "Disables the async render thread (slightly less performance)."},
     {"Idioma del launcher", "Launcher language"},
 };
 static const char *T(const char *es) {
@@ -369,6 +404,40 @@ static TList TL(const char *const *a, int n) { TList t{}; for (int i = 0; i < n 
 static std::string g_root;  // repository root (where targets/, build/, xcde.ini live)
 
 static std::string path(const char *rel) { return g_root + "/" + rel; }
+static bool exists(const char *rel) {
+    SDL_PathInfo pi;
+    return SDL_GetPathInfo(path(rel).c_str(), &pi);
+}
+#ifndef _WIN32
+// [XCDE] T-LINUX: start args[0] in g_root with stdout/stderr in log (truncated), in its own process group; 0 = failed.
+static pid_t spawn_logged(const std::vector<std::string> &args, const std::string &log, bool background) {
+    std::vector<char *> av;
+    for (const std::string &a : args) av.push_back(const_cast<char *>(a.c_str()));
+    av.push_back(NULL);
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addchdir_np(&fa, g_root.c_str());
+    if (!log.empty()) {
+        posix_spawn_file_actions_addopen(&fa, 1, log.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        posix_spawn_file_actions_adddup2(&fa, 1, 2);
+    }
+    posix_spawnattr_t at;
+    posix_spawnattr_init(&at);
+    posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP);
+    posix_spawnattr_setpgroup(&at, 0);
+    pid_t pid = 0;
+    int err = posix_spawnp(&pid, av[0], &fa, &at, av.data(), environ);
+    posix_spawnattr_destroy(&at);
+    posix_spawn_file_actions_destroy(&fa);
+    if (err) { errno = err; return 0; }
+    if (background) setpriority(PRIO_PROCESS, (id_t)pid, 10);
+    return pid;
+}
+static void open_folder(const std::string &dir) {
+    std::string url = "file://" + dir;
+    if (!SDL_OpenURL(url.c_str())) spawn_logged({"xdg-open", dir}, "", false);
+}
+#endif
 struct Mod { std::string name; bool on = true; bool present = true; };
 static std::vector<Mod> g_mods;  // (mods tab; xcde.ini mod_<name>)
 
@@ -398,9 +467,13 @@ static void load() {
         if (!strcmp(k, "fullscreen")) g.fullscreen = atoi(v) != 0;
         else if (!strcmp(k, "aspect")) g.aspect = !strcmp(v, "original") ? ASPECT_ORIGINAL : ASPECT_UNLOCKED;
         else if (!strcmp(k, "window") && (i = find(k_wins, 5, v)) >= 0) g.win = i;
-        else if (!strcmp(k, "resolution") && (i = find(k_res_ini, 7, v)) >= 0) g.res = i;
-        else if (!strcmp(k, "upscaler")) { g.upscaler_auto = !strcmp(v, "auto"); g.upscaler = !strcmp(v, "fsr") || g.upscaler_auto ? 1 : !strcmp(v, "fsr3") ? 2 : !strcmp(v, "dlss") ? 3 : 0; }
+        else if (!strcmp(k, "resolution") && (i = find(k_res_ini, 8, v)) >= 0) g.res = i;
+        else if (!strcmp(k, "upscaler")) { g.upscaler_auto = !strcmp(v, "auto"); g.upscaler = !strcmp(v, "fsr") || g.upscaler_auto ? 1 : !strcmp(v, "fsr3") ? 2 : !strcmp(v, "dlss") ? 3 : !strcmp(v, "fsr4lite") ? 4 : 0; }
         else if (!strcmp(k, "upscale_quality") && (i = find(k_uq_ini, 5, v)) >= 0) g.uquality = i;
+        else if (!strcmp(k, "upscale_sharpness")) {
+            float x = strcmp(v, "default") ? (float)atof(v) : -1.0f;
+            g.sharpness = x < 0.0f ? -1.0f : x > 1.0f ? 1.0f : x;
+        }
         else if (!strcmp(k, "frame_gen")) g.frame_gen = atoi(v) != 0;
         else if (!strcmp(k, "antialias")) g.smaa = !strcmp(v, "smaa");
         else if (!strcmp(k, "depth_of_field")) g.dof = atoi(v) != 0;
@@ -418,6 +491,7 @@ static void load() {
         else if (!strcmp(k, "gpu_gpl")) g.gpu_gpl = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
         else if (!strcmp(k, "gpu_memory_budget")) g.gpu_memory_budget = atoi(v) != 0;
         else if (!strcmp(k, "occlusion")) g.occlusion = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
+        else if (!strcmp(k, "grass_lod")) g.grass_lod = grass_lod_parse(v);
         else if (!strcmp(k, "amd_fix")) g.amd_fix = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
         else if (!strcmp(k, "session_fix")) g.session_fix = !strcmp(v, "on") ? 1 : !strcmp(v, "off") ? 0 : -1;
         else if (!strcmp(k, "rumble")) g.rumble = atoi(v) != 0;
@@ -462,6 +536,7 @@ static bool save() {
         g.gpu_uuid, g.gpu_index, g.gpu_profile ? "compatibility" : "auto", g.gpu_gpl < 0 ? "auto" : g.gpu_gpl ? "on" : "off",
         g.gpu_memory_budget, xcde_quality_name(g.quality_preset), g.gpu_keep_heavy);
     fprintf(f, "occlusion = %s\n", g.occlusion == 1 ? "on" : g.occlusion == 0 ? "off" : "auto");
+    fprintf(f, "grass_lod = %s\n", grass_lod_ini[grass_lod_valid(g.grass_lod)]);
     fprintf(f, "amd_fix = %s\n", g.amd_fix == 1 ? "on" : g.amd_fix == 0 ? "off" : "auto");
     fprintf(f, "session_fix = %s\n", g.session_fix == 1 ? "on" : g.session_fix == 0 ? "off" : "auto");
     gfx_save(f, &g.graphics);  // [XCDE]
@@ -471,6 +546,8 @@ static bool save() {
     fprintf(f, "aspect = %s\n", g.aspect == ASPECT_ORIGINAL ? "original" : "auto");
     fprintf(f, "vulkan_api = %s\nfps_overlay = %d\n", g.vulkan_api == 12 ? "1.2" : g.vulkan_api == 13 ? "1.3" : g.vulkan_api == 14 ? "1.4" : "auto", g.fps_overlay);
     fprintf(f, "upscale_quality = %s\nframe_gen = %d\n", k_uq_ini[g.uquality], g.frame_gen);
+    if (g.sharpness < 0.0f) fprintf(f, "upscale_sharpness = default\n");
+    else fprintf(f, "upscale_sharpness = %.3f\n", g.sharpness);
     fprintf(f, "depth_of_field = %d\n", g.dof);
     fprintf(f, "game_blur = %d\n", g.game_blur);
     fprintf(f, "taa = %d\n", g.taa);
@@ -494,10 +571,6 @@ static bool save() {
     return xcde_ini_commit(f, tmp, settings_path.c_str()) != 0;
 }
 
-static bool exists(const char *rel) {
-    SDL_PathInfo pi;
-    return SDL_GetPathInfo(path(rel).c_str(), &pi);
-}
 
 // [XCDE] GitHub #18: game files from another game version can't run on this build (the recompiled code
 // matches exactly one NSO revision): find it out here so the player sees a clear message in the launcher
@@ -543,6 +616,54 @@ static bool g_mod_dirty;
 static bool g_launched_ok;  // (launch() started the game: the launcher closes)
 static float g_scale = 1;
 
+#ifndef _WIN32
+// [XCDE] T-LINUX-DUMP-PICKER: choose the dump folder with the desktop's folder dialog. The game and the launcher read it
+// as targets/ (here a link, which the AppImage's AppRun also maintains): the choice is remembered by that link.
+// A real targets/ folder (a dump copied into the checkout) is never replaced.
+static SDL_Mutex *g_dump_lock;
+static bool g_dump_pending, g_dump_ready;
+static std::string g_dump_selected, g_dump_error;
+static void SDLCALL dump_selected(void *, const char *const *files, int) {
+    SDL_LockMutex(g_dump_lock);
+    g_dump_selected = files && files[0] ? files[0] : "";
+    g_dump_error = files ? "" : std::string("Could not open the folder dialog: ") + SDL_GetError();
+    g_dump_ready = true;
+    SDL_UnlockMutex(g_dump_lock);
+}
+static void check_game_version();
+static void dump_poll() {
+    if (!g_dump_lock) return;
+    SDL_LockMutex(g_dump_lock);
+    bool ready = g_dump_ready;
+    std::string chosen = g_dump_selected, error = g_dump_error;
+    g_dump_ready = false;
+    SDL_UnlockMutex(g_dump_lock);
+    if (!ready) return;
+    g_dump_pending = false;
+    if (!error.empty()) { g_status = error; return; }
+    if (chosen.empty()) return;  // (cancel: keep the current dump)
+    SDL_PathInfo pi;
+    if (!SDL_GetPathInfo((chosen + "/exefs/main").c_str(), &pi) || !SDL_GetPathInfo((chosen + "/romfs").c_str(), &pi) ||
+        pi.type != SDL_PATHTYPE_DIRECTORY) {
+        g_status = g.ui_lang ? "Not a dump: choose the folder that contains exefs/main and romfs/." :
+                               "No es un volcado: elige la carpeta que contiene exefs/main y romfs/.";
+        return;
+    }
+    std::string link = path("targets");
+    struct stat ls;
+    if (lstat(link.c_str(), &ls) == 0 && !S_ISLNK(ls.st_mode)) {
+        g_status = g.ui_lang ? "targets/ is a real folder here: move or rename it to use another dump." :
+                               "targets/ es una carpeta real: muévela o renómbrala para usar otro volcado.";
+        return;
+    }
+    remove(link.c_str());
+    if (symlink(chosen.c_str(), link.c_str()) != 0) { g_status = std::string("Could not link targets/: ") + strerror(errno); return; }
+    g_mismatch_desc[0] = 0;
+    check_game_version();  // [XCDE] GitHub #18: the version check again, for the new files
+    g_status = g.ui_lang ? "Game dump selected." : "Volcado del juego seleccionado.";
+}
+#endif
+
 static void launch() {
     if (!save()) { g_status = T("No se pudo escribir xcde.ini"); return; }
 #ifdef _WIN32
@@ -574,6 +695,13 @@ static void launch() {
     CloseHandle(pi.hProcess);
     g_status = T("Juego iniciado. Registro: build/last_game.log");
     g_launched_ok = true;
+#else
+    std::string exe = path(GAME_EXE), log = path("build/last_game.log");
+    rename(log.c_str(), path("build/last_game.prev.log").c_str());  // [XCDE] T260: keep the previous run's log
+    pid_t pid = spawn_logged({exe, "targets"}, log, false);
+    if (!pid) { g_status = std::string("Could not start " GAME_EXE " (") + strerror(errno) + ")"; return; }
+    g_status = T("Juego iniciado. Registro: build/last_game.log");
+    g_launched_ok = true;
 #endif
 }
 
@@ -584,6 +712,8 @@ static void launch() {
 // when it was never done (once, a few minutes; "Omitir" skips it).
 #ifdef _WIN32
 static HANDLE g_pc_proc;
+#else
+static pid_t g_pc_proc;  // [XCDE] T-LINUX
 #endif
 static bool g_pc_then_play, g_pc_play_now;
 static float g_pc_frac;
@@ -599,14 +729,14 @@ static bool pc_done() {
     while (fgets(line, sizeof line, f)) sscanf(line, "exe %lld %lld", &sz, &mt);
     fclose(f);
     struct stat es;
-    if (stat(path("build/xcde.exe").c_str(), &es) != 0) return true;
+    if (stat(path(GAME_EXE).c_str(), &es) != 0) return true;
     return sz == (long long)es.st_size && mt == (long long)es.st_mtime;
 }
 static bool pc_running() {
 #ifdef _WIN32
     return g_pc_proc != NULL;
 #else
-    return false;
+    return g_pc_proc != 0;
 #endif
 }
 
@@ -643,6 +773,17 @@ static void pc_start(bool then_play) {
     g_pc_frac = 0;
     g_pc_text = T("Buscando shaders en los archivos del juego...");
     g_status = then_play ? T("Preparando shaders antes de la primera partida (solo esta vez)") : T("Precompilando shaders");
+#else
+    if (g_pc_proc) return;
+    SDL_CreateDirectory(path("cache").c_str());
+    remove(path("cache/precompile_progress.txt").c_str());
+    pid_t pid = spawn_logged({path(GAME_EXE), "--precompile", "targets"}, path("build/last_precompile.log"), true);
+    if (!pid) { g_status = std::string(T("No se pudo iniciar la precompilación (error ")) + strerror(errno) + ")"; return; }
+    g_pc_proc = pid;
+    g_pc_then_play = then_play;
+    g_pc_frac = 0;
+    g_pc_text = T("Buscando shaders en los archivos del juego...");
+    g_status = then_play ? T("Preparando shaders antes de la primera partida (solo esta vez)") : T("Precompilando shaders");
 #endif
 }
 
@@ -653,12 +794,18 @@ static void pc_stop() {
     WaitForSingleObject(g_pc_proc, 2000);
     CloseHandle(g_pc_proc);
     g_pc_proc = NULL;
+#else
+    if (!g_pc_proc) return;
+    kill(-g_pc_proc, SIGTERM);  // (its process group: the driver's shader threads too)
+    bool ended = false;
+    for (int i = 0; i < 20 && !ended; i++) { ended = waitpid(g_pc_proc, NULL, WNOHANG) == g_pc_proc; if (!ended) SDL_Delay(100); }
+    if (!ended) { kill(-g_pc_proc, SIGKILL); waitpid(g_pc_proc, NULL, 0); }
+    g_pc_proc = 0;
 #endif
 }
 
 // (every frame while it runs) progress from the file; at the end, the result and JUGAR if it was waiting
 static void pc_poll() {
-#ifdef _WIN32
     if (!g_pc_proc) return;
     static Uint64 last;
     Uint64 now = SDL_GetTicks();
@@ -682,16 +829,22 @@ static void pc_poll() {
         }
         fclose(f);
     }
+#ifdef _WIN32
     if (WaitForSingleObject(g_pc_proc, 0) != WAIT_OBJECT_0) return;
     DWORD code = 1;
     GetExitCodeProcess(g_pc_proc, &code);
     CloseHandle(g_pc_proc);
     g_pc_proc = NULL;
+#else
+    int st = 0;
+    if (waitpid(g_pc_proc, &st, WNOHANG) != g_pc_proc) return;
+    int code = WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+    g_pc_proc = 0;
+#endif
     // [XCDE] T240: a run that died while the driver was building (cache/precompile_inflight.bin left behind) starts
     // again by itself - the new run skips what was being built (precompile.c crash-safe) - up to 3 times
     static int retries;
-    DWORD att = GetFileAttributesA(path("cache/precompile_inflight.bin").c_str());
-    if (!(code == 0 && pc_done()) && att != INVALID_FILE_ATTRIBUTES && retries < 3) {
+    if (!(code == 0 && pc_done()) && exists("cache/precompile_inflight.bin") && retries < 3) {
         retries++;
         bool then_play = g_pc_then_play;
         pc_start(then_play);
@@ -701,7 +854,6 @@ static void pc_poll() {
     retries = 0;
     g_status = code == 0 && pc_done() ? T("Shaders precompilados") : T("La precompilación falló (registro: build/last_precompile.log)");
     if (g_pc_then_play) g_pc_play_now = true;
-#endif
 }
 
 // ------------------------------------------------------------------ remapping capture
@@ -760,11 +912,11 @@ static bool capture_event(const SDL_Event &e) {
 // [XCDE] T259: adapt the legacy launcher model at one boundary; policy lives in quality_policy.h.
 static Settings quality_settings() {
     Settings v{};
-    static const int resolutions[]={RES_MATCH,1,2,3,RES_Q75,RES_Q50,RES_DYNAMIC};
-    static const int upscalers[]={UPSCALE_BILINEAR,UPSCALE_FSR1,UPSCALE_FSR3,UPSCALE_DLSS};
+    static const int resolutions[]={RES_MATCH,1,RES_1_5,2,3,RES_Q75,RES_Q50,RES_DYNAMIC};
+    static const int upscalers[]={UPSCALE_BILINEAR,UPSCALE_FSR1,UPSCALE_FSR3,UPSCALE_DLSS,UPSCALE_FSR4_LITE};
     static const int fps[]={30,60,120,144,165,0};
     v.quality_preset=g.quality_preset; v.gpu_performance=g.gpu_performance;
-    v.res_mode=resolutions[std::clamp(g.res,0,6)]; v.upscaler=upscalers[std::clamp(g.upscaler,0,3)];
+    v.res_mode=resolutions[std::clamp(g.res,0,7)]; v.upscaler=upscalers[std::clamp(g.upscaler,0,4)];
     v.upscaler_auto=g.upscaler_auto; v.antialias=g.smaa ? AA_SMAA : AA_OFF;
     v.upscale_quality=g.uquality;
     v.dof_off=!g.dof; v.game_blur=g.game_blur; v.frame_gen=g.frame_gen;
@@ -773,11 +925,11 @@ static Settings quality_settings() {
     v.cutscene_mode=g.cut_fg ? 2 : g.cutscenes ? 1 : 0; return v;
 }
 static void quality_from_settings(const Settings &v) {
-    static const int resolutions[]={RES_MATCH,1,2,3,RES_Q75,RES_Q50,RES_DYNAMIC};
-    static const int upscalers[]={UPSCALE_BILINEAR,UPSCALE_FSR1,UPSCALE_FSR3,UPSCALE_DLSS};
+    static const int resolutions[]={RES_MATCH,1,RES_1_5,2,3,RES_Q75,RES_Q50,RES_DYNAMIC};
+    static const int upscalers[]={UPSCALE_BILINEAR,UPSCALE_FSR1,UPSCALE_FSR3,UPSCALE_DLSS,UPSCALE_FSR4_LITE};
     static const int fps[]={30,60,120,144,165,0};
-    for (int i=0;i<7;i++) if (resolutions[i]==v.res_mode) g.res=i;
-    for (int i=0;i<4;i++) if (upscalers[i]==v.upscaler) g.upscaler=i;
+    for (int i=0;i<8;i++) if (resolutions[i]==v.res_mode) g.res=i;
+    for (int i=0;i<5;i++) if (upscalers[i]==v.upscaler) g.upscaler=i;
     for (int i=0;i<6;i++) if (fps[i]==v.fps) g.fps=i;
     g.quality_preset=v.quality_preset; g.gpu_performance=v.gpu_performance;
     g.upscaler_auto=v.upscaler_auto; g.smaa=v.antialias==AA_SMAA;
@@ -804,9 +956,6 @@ static void tab_home() {
     ImGui::TextWrapped("%s",g.ui_lang ? "For modest hardware, start with Potato and a 30 FPS target. Quality and frame rate are independent." :
         "En equipos modestos, empieza con Patata y un objetivo de 30 FPS. La calidad y los FPS se eligen por separado.");
     ImGui::SeparatorText(g.ui_lang ? "Shader preparation" : "Preparación de shaders");
-    ImGui::BeginDisabled(pc_running() || !exists("build/xcde.exe") || *g_mismatch_desc);
-    if (ImGui::Button(T("Precompilar shaders"))) pc_start(false);
-    ImGui::EndDisabled();
     static uint64_t checked; static bool prepared;
     if (!checked || SDL_GetTicks()-checked>500) { prepared=pc_done(); checked=SDL_GetTicks(); }
     ImGui::TextWrapped("%s",prepared ? (g.ui_lang ? "Prepared for this executable. New areas can still need additional variants." :
@@ -867,7 +1016,7 @@ static void tab_graphics() {
         static const char *amd_ui[] = {"Automático (RDNA 3: activado)", "Desactivado", "Activado"};
         static const char *amd_en[] = {"Automatic (RDNA 3: on)", "Off", "On"};
         int fix = g.amd_fix == 0 ? 1 : g.amd_fix == 1 ? 2 : 0;
-        if (monado_combo(g.ui_lang ? "Fix de parpadeo AMD (al reiniciar)" : "AMD flicker fix (restart)",
+        if (monado_combo(g.ui_lang ? "AMD flicker fix (restart)" : "Fix de parpadeo AMD (al reiniciar)",
                          &fix, g.ui_lang ? amd_en : amd_ui, 3))
             g.amd_fix = fix == 1 ? 0 : fix == 2 ? 1 : -1;
         ImGui::SetItemTooltip(T("Puntos de color de 1-2 px en gráficas AMD RDNA 3 (issue #7).\n"
@@ -877,7 +1026,7 @@ static void tab_graphics() {
         static const char *ss_ui[] = {"Automático (activado)", "Desactivado", "Activado"};
         static const char *ss_en[] = {"Automatic (on)", "Off", "On"};
         int ss = g.session_fix == 0 ? 1 : g.session_fix == 1 ? 2 : 0;
-        if (monado_combo(g.ui_lang ? "Compatibilidad de sesión larga (al reiniciar)" : "Long-session compatibility (restart)",
+        if (monado_combo(g.ui_lang ? "Long-session compatibility (restart)" : "Compatibilidad de sesión larga (al reiniciar)",
                          &ss, g.ui_lang ? ss_en : ss_ui, 3))
             g.session_fix = ss == 1 ? 0 : ss == 2 ? 1 : -1;
         ImGui::SetItemTooltip(T("Evita que modelos y texturas se corrompan en partidas largas.\n"
@@ -893,15 +1042,21 @@ static void tab_graphics() {
     monado_combo(T("Tamaño de la ventana"), &g.win, k_wins, 5);
     ImGui::SeparatorText(T("Resolución y escalado"));
     ImGui::SetNextItemWidth(360 * g_scale);
-    monado_combo(T("Resolución interna"), &g.res, TL(k_res_ui, 7).p, 7);
+    monado_combo(T("Resolución interna"), &g.res, TL(k_res_ui, 8).p, 8);
     ImGui::TextDisabled(T("El juego original renderiza a 720p. Más resolución = imagen más nítida y más carga para la GPU."));
     const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal, cualquier GPU)",
-                         "NVIDIA DLSS (temporal, GPU RTX)"};
+                         "NVIDIA DLSS (temporal, GPU RTX)", "AMD FSR 4 Lite (temporal, nativo)"};
+#ifdef __linux__
+    const int nups = 5;  // [XCDE] T-FSR4-LITE: the native Linux component
+#else
+    const int nups = 4;
+    if (g.upscaler > 3) g.upscaler = 1;
+#endif
     ImGui::SetNextItemWidth(320 * g_scale);
     const char *up_preview = g.upscaler_auto ? (g.ui_lang ? "Automatic (DLSS on supported RTX)" : "Automático (DLSS en RTX compatible)") : T(ups[g.upscaler]);
     if (monado_begin_combo(T("Escalado / antialiasing"), up_preview)) {
         if (ImGui::Selectable(g.ui_lang ? "Automatic (recommended)" : "Automático (recomendado)", g.upscaler_auto)) g.upscaler_auto = true;
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < nups; ++i) {
             ImGui::BeginDisabled(i == 3 && !dlss_candidate);
             if (ImGui::Selectable(T(ups[i]), !g.upscaler_auto && g.upscaler == i)) { g.upscaler_auto = false; g.upscaler = i; }
             ImGui::EndDisabled();
@@ -918,6 +1073,17 @@ static void tab_graphics() {
                           "y reconstruyen la imagen de la ventana con varios frames: más FPS y bordes sin dientes.\n"
                           "Sustituyen al antialiasing temporal del juego. DLSS necesita una GPU NVIDIA RTX; si no\n"
                           "está disponible se usa FSR 3.1."));
+    if (g.upscaler == 1 || g.upscaler == 2) {  // [XCDE] RCAS strength (FSR 1 / FSR 3), also live in F1
+        float sharp = g.sharpness >= 0.0f ? g.sharpness : g.upscaler == 1 ? 0.9f : 0.3f;
+        ImGui::SetNextItemWidth(320 * g_scale);
+        if (ImGui::SliderFloat(g.ui_lang ? "Sharpening (RCAS)" : "Nitidez (RCAS)", &sharp, 0.0f, 1.0f, "%.2f")) g.sharpness = sharp;
+        ImGui::SetItemTooltip("%s", g.ui_lang ? "0 = off, 1 = maximum. Default: FSR 1 0.90, FSR 3 0.30 (as before)."
+                                              : "0 = desactivada, 1 = máxima. Predeterminada: FSR 1 0,90, FSR 3 0,30 (como antes).");
+        if (g.sharpness >= 0.0f) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton(g.ui_lang ? "Default" : "Predeterminada")) g.sharpness = -1.0f;
+        }
+    }
     if (g.upscaler >= 2 || (g.upscaler_auto && dlss_candidate)) {
         const char *uq[] = {"Nativo (solo antialiasing: DLAA / FSR Native AA)", "Calidad (67 %)", "Equilibrado (59 %)",
                             "Rendimiento (50 %)", "Ultra rendimiento (33 %)"};
@@ -949,6 +1115,12 @@ static void tab_graphics() {
                           "Desactivado: imagen nítida (combínalo con SMAA para los bordes)."));
     ImGui::Checkbox(T("Antialiasing temporal (TAA) del juego"), &g.taa);
     ImGui::SetItemTooltip(T("Solo el TAA, sin tocar el desenfoque de movimiento ni el del pelo.\nDesactivado: quita el emborronado del TAA (combínalo con SMAA para los bordes)."));
+    g.grass_lod = grass_lod_valid(g.grass_lod);  // [XCDE] grass draw distance (also live in F1)
+    monado_combo(g.ui_lang ? "Grass distance" : "Distancia de la hierba", &g.grass_lod,
+                 g.ui_lang ? grass_lod_labels : grass_lod_labels_es, GRASS_PRESET_COUNT);
+    ImGui::SetItemTooltip("%s", g.ui_lang
+        ? "Keeps grass visible farther away. Higher settings cost FPS. Original keeps High's nearby detail at the original distance; Low halves reach. Also live in F1."
+        : "Mantiene la hierba visible más lejos. Los valores altos cuestan FPS. Original conserva el detalle cercano de Alta a la distancia original; Baja reduce el alcance a la mitad. También en vivo en F1.");
     ImGui::Checkbox(g.ui_lang ? "On-screen FPS counter" : "Contador FPS en pantalla", &g.fps_overlay);
     ImGui::Checkbox(T("Mostrar FPS en la barra de título"), &g.show_fps);
     ImGui::SeparatorText(g.ui_lang ? "Shadows, detail and effects" : "Sombras, detalle y efectos");  // [XCDE]
@@ -1082,8 +1254,30 @@ static void tab_controls() {
 
 // Mods: every folder in mods/ with a romfs/ inside (runtime/services/romfs_virtual.c applies them alphabetically,
 // a later one wins for the same file); xcde.ini mod_<folder> = 0/1, on by default.
+#ifndef _WIN32
+// [XCDE] T-LINUX: the names in dir matching pattern (SDL_GlobDirectory, sorted as the Windows listing order is unspecified)
+static std::vector<std::string> list_dir(const char *rel, const char *pattern) {
+    std::vector<std::string> out;
+    int n = 0;
+    char **names = SDL_GlobDirectory(path(rel).c_str(), pattern, 0, &n);
+    for (int i = 0; names && i < n; i++) out.push_back(names[i]);
+    SDL_free(names);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+#endif
 static void scan_mods() {
     std::vector<Mod> found;
+#ifndef _WIN32
+    for (const std::string &name : list_dir("mods", "*")) {
+        SDL_PathInfo pi;
+        if (name[0] == '.' || !SDL_GetPathInfo(path(("mods/" + name + "/romfs").c_str()).c_str(), &pi) ||
+            pi.type != SDL_PATHTYPE_DIRECTORY) continue;
+        Mod m{name, true};
+        for (const Mod &o : g_mods) if (o.name == m.name) m.on = o.on;
+        found.push_back(m);
+    }
+#else
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA(path("mods\\*").c_str(), &fd);
     if (h != INVALID_HANDLE_VALUE) {
@@ -1098,6 +1292,7 @@ static void scan_mods() {
         } while (FindNextFileA(h, &fd));
         FindClose(h);
     }
+#endif
     std::sort(found.begin(), found.end(), [](const Mod &a, const Mod &b) { return a.name < b.name; });
     for (const Mod &o : g_mods) {  // (keep the settings of folders not present now)
         bool here = false;
@@ -1111,6 +1306,35 @@ static void scan_mods() {
 // run's and the previous one, build\last_game*.log), every other build\*.log, xcde.ini and the newest crash report (crash\, text + minidump).
 // No saves or game files. Zipped by the tar.exe that Windows 10+ ships; the folder opens when it is done.
 static void make_report() {
+#ifndef _WIN32
+    // [XCDE] T-LINUX: the same files, zipped by bsdtar (libarchive's tar: -a picks the format from .zip)
+    std::vector<std::string> files;
+    for (const char *f : {"build/last_game.log", "build/last_game.prev.log", "build/last_precompile.log", "build/launcher.log",
+                          "build/lasrecomp.log", "build/lasrecomp.prev.log", "xcde.ini"})
+        if (exists(f)) files.push_back(f);
+    for (const std::string &n : list_dir("build", "*.log")) {
+        std::string rel = "build/" + n;
+        if (std::find(files.begin(), files.end(), rel) == files.end()) files.push_back(rel);
+    }
+    std::vector<std::string> crashes = list_dir("crash", "crash_*.txt");
+    if (!crashes.empty()) files.push_back("crash/" + crashes.back());  // (crash_<stamp>.txt sorts by date)
+    if (files.empty()) { g_status = T("No hay nada que reportar todavía (ni logs ni xcde.ini)"); return; }
+    SDL_CreateDirectory(path("reports").c_str());
+    char stamp[32];
+    time_t now = time(NULL);
+    strftime(stamp, sizeof stamp, "%Y%m%d_%H%M%S", localtime(&now));
+    std::string zip = std::string("reports/xcde_report_") + stamp + ".zip";
+    std::vector<std::string> args = {"bsdtar", "-a", "-c", "-f", zip};
+    for (const std::string &f : files) args.push_back(f);
+    pid_t pid = spawn_logged(args, "", false);
+    int st = 1;
+    if (!pid || waitpid(pid, &st, 0) != pid || !WIFEXITED(st) || WEXITSTATUS(st)) {
+        g_status = "Could not create the report (bsdtar from libarchive is needed)";
+        return;
+    }
+    g_status = std::string(T("Reporte creado: ")) + zip + T(" (adjúntalo al reportar el problema)");
+    open_folder(path("reports"));
+#else
     std::vector<std::string> files;
     for (const char *f : {"build/last_game.log", "build/last_game.prev.log", "build/last_precompile.log", "build/launcher.log",
                           "build/lasrecomp.log", "build/lasrecomp.prev.log", "xcde.ini"})
@@ -1166,6 +1390,7 @@ static void make_report() {
     if (code) { g_status = T("No se pudo crear el reporte"); return; }
     g_status = std::string(T("Reporte creado: ")) + zip + T(" (adjúntalo al reportar el problema)");
     ShellExecuteA(NULL, "open", path("reports").c_str(), NULL, NULL, SW_SHOWNORMAL);
+#endif
 }
 
 static void tab_mods() {
@@ -1176,8 +1401,13 @@ static void tab_mods() {
                        "cambian el mismo archivo, gana el último. Los mods de código (exefs, parches .pchtxt / IPS) no "
                        "funcionan en esta versión recompilada."));
     if (ImGui::Button(T("Abrir carpeta de mods"))) {
+#ifdef _WIN32
         CreateDirectoryA(path("mods").c_str(), NULL);
         ShellExecuteA(NULL, "open", path("mods").c_str(), NULL, NULL, SW_SHOWNORMAL);
+#else
+        SDL_CreateDirectory(path("mods").c_str());
+        open_folder(path("mods"));
+#endif
     }
     ImGui::SameLine();
     if (ImGui::Button(T("Actualizar lista"))) scan_mods();
@@ -1218,9 +1448,14 @@ static int fail(const char *what) {
     char msg[1024];
     snprintf(msg, sizeof msg, "%s\n\n%s\n\n(build\\launcher.log)", what, SDL_GetError());
     llog("ERROR: %s: %s", what, SDL_GetError());
+#ifdef _WIN32
     MessageBoxA(NULL, msg, "Monado - Launcher", MB_OK | MB_ICONERROR);
+#else
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Monado - Launcher", msg, NULL);
+#endif
     return 1;
 }
+#ifdef _WIN32
 static LONG WINAPI crash_filter(EXCEPTION_POINTERS *e) {
     char msg[256];
     snprintf(msg, sizeof msg, "The launcher crashed (exception %#lx at %p).\n\n(build\\launcher.log)",
@@ -1229,26 +1464,96 @@ static LONG WINAPI crash_filter(EXCEPTION_POINTERS *e) {
     MessageBoxA(NULL, msg, "Monado - Launcher", MB_OK | MB_ICONERROR);
     return EXCEPTION_EXECUTE_HANDLER;
 }
+#endif
+
+// [XCDE] Launcher fonts: body 17 px and headings 34 px at the window's display scale, rasterized at the physical
+// pixel density (HiDPI/Wayland/macOS-style scaling) and drawn back at 1/density. Rebuilt when the window changes scale.
+static ImFont *g_heading_font;
+static void launcher_fonts(ImGuiIO &io, float scale, float density) {
+    io.Fonts->Clear();
+    ImFontConfig cfg; cfg.OversampleH = 2; cfg.OversampleV = 2;
+#ifdef _WIN32
+    static const char *body_files[] = {"C:\\Windows\\Fonts\\segoeui.ttf"};
+    static const char *head_files[] = {"C:\\Windows\\Fonts\\seguisb.ttf", "C:\\Windows\\Fonts\\segoeui.ttf"};
+#else
+    static const char *body_files[] = {"/usr/share/fonts/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+                                       "/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                                       "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"};
+    static const char *head_files[] = {"/usr/share/fonts/noto/NotoSans-SemiBold.ttf", "/usr/share/fonts/truetype/noto/NotoSans-SemiBold.ttf",
+                                       "/usr/share/fonts/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+                                       "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                                       "/usr/share/fonts/liberation/LiberationSans-Bold.ttf"};
+#endif
+    auto add = [&](const char *const *files, size_t n, float px) -> ImFont * {
+        for (size_t i = 0; i < n; i++) { SDL_PathInfo pi; if (SDL_GetPathInfo(files[i], &pi)) return io.Fonts->AddFontFromFileTTF(files[i], px, &cfg); }
+        return nullptr;
+    };
+    ImFont *body = add(body_files, sizeof body_files / sizeof *body_files, 17.0f * scale * density);
+    if (!body) { ImFontConfig d; d.SizePixels = 13.0f * scale * density; body = io.Fonts->AddFontDefault(&d); }
+    ImFont *head = add(head_files, sizeof head_files / sizeof *head_files, 34.0f * scale * density);
+    g_heading_font = head ? head : body;
+    io.FontGlobalScale = 1.0f / density;
+}
+
+// [XCDE] Header banner: original vector scenery (gradient, two ridges, a ring-and-blade emblem). No image assets.
+static void launcher_header(float scale) {
+    ImVec2 hp = ImGui::GetCursorScreenPos();
+    float hw = ImGui::GetContentRegionAvail().x, hh = 132 * scale;
+    ImDrawList *art = ImGui::GetWindowDrawList();
+    art->AddRectFilledMultiColor(hp, ImVec2(hp.x + hw, hp.y + hh),
+        IM_COL32(25,39,52,255), IM_COL32(25,55,66,255), IM_COL32(9,19,27,255), IM_COL32(14,22,33,255));
+    for (int layer = 0; layer < 2; layer++) {
+        ImVec2 ridge[7] = {{hp.x+hw*.54f,hp.y+hh}, {hp.x+hw*.62f,hp.y+hh*.67f}, {hp.x+hw*.70f,hp.y+hh*.80f},
+            {hp.x+hw*.77f,hp.y+hh*(.38f+layer*.14f)}, {hp.x+hw*.87f,hp.y+hh*.68f}, {hp.x+hw,hp.y+hh*.53f}, {hp.x+hw,hp.y+hh}};
+        art->AddConcavePolyFilled(ridge, 7, layer ? IM_COL32(16,30,38,255) : IM_COL32(37,66,75,255));
+    }
+    ImVec2 ring(hp.x + hw - 100 * scale, hp.y + hh * .43f);
+    art->AddCircle(ring, 29*scale, IM_COL32(219,48,76,255), 48, 9*scale);
+    art->AddLine(ImVec2(ring.x+18*scale, ring.y-24*scale), ImVec2(ring.x+39*scale, ring.y-57*scale), IM_COL32(219,48,76,255), 10*scale);
+    art->AddLine(ImVec2(ring.x-16*scale, ring.y+25*scale), ImVec2(ring.x-36*scale, ring.y+59*scale), IM_COL32(219,48,76,255), 6*scale);
+    art->AddCircle(ring, 15*scale, IM_COL32(95,221,230,255), 48, 2*scale);
+    ImGui::SetCursorScreenPos(ImVec2(hp.x + 22*scale, hp.y + 19*scale));
+    ImGui::TextColored(monado_teal(), "%s", g.ui_lang ? "NATIVE PC EDITION" : "EDICIÓN NATIVA PARA PC");
+    ImGui::SetCursorScreenPos(ImVec2(hp.x + 22*scale, ImGui::GetCursorScreenPos().y));
+    ImGui::PushFont(g_heading_font);
+    ImGui::TextUnformatted("MONADO");
+    ImGui::PopFont();
+    ImGui::SetCursorScreenPos(ImVec2(hp.x + 22*scale, ImGui::GetCursorScreenPos().y));
+    ImGui::TextDisabled("Xenoblade Chronicles: Definitive Edition");
+    ImGui::SetCursorScreenPos(ImVec2(hp.x, hp.y + hh + 14*scale));
+}
 
 int main(int argc, char **argv) {
     // root: the folder above the launcher's build/ folder (or the working directory)
     const char *base = SDL_GetBasePath();
     g_root = base ? base : ".";
     while (!g_root.empty() && (g_root.back() == '/' || g_root.back() == '\\')) g_root.pop_back();
+#ifndef _WIN32
+    if (g_root.size() > 6 && g_root.compare(g_root.size() - 6, 6, "/linux") == 0) g_root.resize(g_root.size() - 6);  // build/linux/
+#endif
     if (g_root.size() > 6 && (g_root.compare(g_root.size() - 6, 6, "\\build") == 0 || g_root.compare(g_root.size() - 6, 6, "/build") == 0))
         g_root.resize(g_root.size() - 6);
+#ifndef _WIN32
+    // [XCDE] T-LINUX-APPIMAGE: a read-only package (AppImage) names the writable folder with the same layout instead
+    const char *data_root = getenv("LARECOMP_DATA_ROOT");
+    if (data_root && *data_root) g_root = data_root;
+#endif
     // --shot <file.bmp> [tab] [precompile]: render a few frames of that tab, save the window as a BMP and quit (tests)
     const char *shot = argc > 2 && !strcmp(argv[1], "--shot") ? argv[2] : NULL;
     int shot_tab = argc > 3 ? atoi(argv[3]) : 0, frame_no = 0;
     bool shot_pc = shot && argc > 4 && !strcmp(argv[4], "precompile");  // (... <tab> precompile: the bar after ~5 s of a run)
+#ifdef _WIN32
     g_llog = fopen((g_root + "\\build\\launcher.log").c_str(), "w");
     SetUnhandledExceptionFilter(crash_filter);
+#else
+    g_llog = fopen((g_root + "/build/launcher.log").c_str(), "w");
+#endif
     llog("launcher start, root %s", g_root.c_str());
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         llog("SDL_Init with gamepads failed (%s): video only", SDL_GetError());
         if (!SDL_Init(SDL_INIT_VIDEO)) return fail("Could not start SDL (video).");
     }
-    SDL_Window *win = SDL_CreateWindow("Monado - Launcher", 980, 680, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
+    SDL_Window *win = SDL_CreateWindow("Monado - Launcher", 1100, 820, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!win) return fail("Could not create the launcher window.");
     SDL_Renderer *ren = SDL_CreateRenderer(win, NULL);
     if (!ren) {  // (an old or missing graphics driver: the CPU renderer still shows the launcher)
@@ -1263,23 +1568,26 @@ int main(int argc, char **argv) {
     ImGuiIO &io = ImGui::GetIO();
     io.IniFilename = NULL;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
-    float scale = shot && argc>6 ? (float)atof(argv[6]) : SDL_GetWindowDisplayScale(win);
+    // Windows reports the scale as display scale with density 1; Wayland/macOS as pixel density with scale 1.
+    float density = SDL_GetWindowPixelDensity(win);
+    if (density <= 0) density = 1;
+    float scale = shot && argc>6 ? (float)atof(argv[6]) : SDL_GetWindowDisplayScale(win) / density;
     if (scale <= 0) scale = 1;
     g_scale = scale;
-    SDL_SetWindowMinimumSize(win,720,540);
-    SDL_SetWindowSize(win, (int)(980 * scale), (int)(680 * scale));
+    SDL_SetWindowMinimumSize(win,820,620);
+    SDL_SetWindowSize(win, (int)(1100 * scale), (int)(820 * scale));
     if (shot && argc>5) { int h=std::clamp(atoi(argv[5]),540,2160); SDL_SetWindowSize(win,h*16/9,h); }
     SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     if (!shot) SDL_ShowWindow(win);
-    if (!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 17.0f * scale)) io.Fonts->AddFontDefault();
-    monado_theme(scale);
+    launcher_fonts(io, scale, density);
+    monado_launcher_theme(scale);
     ImGui_ImplSDL3_InitForSDLRenderer(win, ren);
     ImGui_ImplSDLRenderer3_Init(ren);
     load();
     check_game_version();  // [XCDE] GitHub #18: refuse launching on another game version's files
     if (shot && argc>4 && !strcmp(argv[4],"es")) g.ui_lang=0;
     bool have_game = exists("targets/exefs/main") || exists("targets/exefs");
-    bool have_exe = exists("build/xcde.exe");
+    bool have_exe = exists(GAME_EXE);
     bool run = true, launched = false;
     Cfg saved_cfg; memcpy(&saved_cfg,&g,sizeof g);
     int section=shot ? (shot_tab==4 ? 0 : shot_tab==5 ? 5 : shot_tab==0 ? 1 : shot_tab==1 ? 2 : shot_tab==2 ? 3 : 4) : 0;
@@ -1295,6 +1603,16 @@ int main(int argc, char **argv) {
             if (e.type == SDL_EVENT_QUIT) run = false;
             if (e.type == SDL_EVENT_GAMEPAD_ADDED) SDL_OpenGamepad(e.gdevice.which);
         }
+        if (!shot) {  // the window moved to a monitor with another scale: re-rasterize the fonts and resize the style
+            float nd = SDL_GetWindowPixelDensity(win); if (nd <= 0) nd = 1;
+            float ns = SDL_GetWindowDisplayScale(win) / nd; if (ns <= 0) ns = 1;
+            if (fabsf(nd - density) > 0.01f || fabsf(ns - scale) > 0.01f) {
+                ImGui_ImplSDLRenderer3_DestroyFontsTexture();
+                launcher_fonts(io, ns, nd);
+                ImGui::GetStyle().ScaleAllSizes(ns / scale);
+                scale = ns; density = nd; g_scale = scale;
+            }
+        }
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
@@ -1302,26 +1620,53 @@ int main(int argc, char **argv) {
         ImGui::SetNextWindowPos(vp->WorkPos);
         ImGui::SetNextWindowSize(vp->WorkSize);
         ImGui::Begin("main", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-        ImGui::SetWindowFontScale(1.5f);
-        ImGui::TextColored(monado_rgb(0x59C985), "Monado");
-        ImGui::SetWindowFontScale(1.0f);
-        ImGui::TextDisabled("Xenoblade Chronicles: Definitive Edition");
+        launcher_header(scale);
+#ifndef _WIN32
+        if (g_dump_pending) {
+            dump_poll();
+            have_game = exists("targets/exefs/main") || exists("targets/exefs");  // (the dump may have changed)
+        }
+        ImGui::BeginDisabled(pc_running() || g_dump_pending);
+        if (ImGui::Button(g_dump_pending ? "..." : g.ui_lang ? "Select game dump" : "Elegir volcado del juego")) {
+            if (!g_dump_lock) g_dump_lock = SDL_CreateMutex();
+            g_dump_pending = true;
+            SDL_ShowOpenFolderDialog(dump_selected, nullptr, win, NULL, false);
+        }
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("%s", g.ui_lang ? "The folder with exefs/ and romfs/ (version 2.0.0). Remembered as targets/."
+                                              : "La carpeta con exefs/ y romfs/ (versión 2.0.0). Se recuerda como targets/.");
+        ImGui::SameLine();
+        ImGui::TextUnformatted(have_game ? (g.ui_lang ? "Game files found" : "Archivos del juego encontrados")
+                                         : (g.ui_lang ? "Select your game files" : "Elige los archivos del juego"));
+        ImGui::SameLine();
+#endif
         {   // [XCDE] the launcher's own language (Spanish / English), saved with the settings
             static const char *ll[] = {"Español", "English"};
-            ImGui::SameLine(ImGui::GetContentRegionMax().x - 330 * scale);
+            const char *lbl = T("Idioma del launcher");
+            float w = 150 * scale + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(lbl).x;
+            ImGui::SetCursorPosX(fmaxf(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - w));
             ImGui::SetNextItemWidth(150 * scale);
-            ImGui::Combo(T("Idioma del launcher"), &g.ui_lang, ll, 2);
+            ImGui::Combo(lbl, &g.ui_lang, ll, 2);
         }
-        float bottom = ImGui::GetFrameHeightWithSpacing() * (pc_running() ? 3.3f : 2.2f);
+        float bottom = ImGui::GetFrameHeightWithSpacing() * (pc_running() ? 3.3f : 2.2f) + ImGui::GetStyle().ItemSpacing.y;
 
-        ImGui::BeginChild("navigation",ImVec2(164*scale,-bottom),ImGuiChildFlags_Borders);
+        ImGui::BeginChild("navigation",ImVec2(224*scale,-bottom),0,ImGuiWindowFlags_AlwaysUseWindowPadding);
+        ImGui::TextDisabled("%s", g.ui_lang ? "CONFIGURATION" : "CONFIGURACIÓN");
+        ImGui::Spacing();
         const char *es[]={"Inicio","Gráficos","Controles","Audio e idioma","Mods","Diagnóstico"};
         const char *en[]={"Home","Graphics","Controls","Audio & language","Mods","Diagnostics"};
-        for (int i=0;i<6;i++) if (ImGui::Selectable(g.ui_lang ? en[i] : es[i],section==i,0,ImVec2(0,32*scale))) section=i;
-        ImGui::Separator();
-        if (ImGui::Button(T("Salir"),ImVec2(-1,0))) run=false;
+        static int shown_section = -1;
+        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(.50f,.13f,.19f,1));  // the selected page: the crimson accent
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(.65f,.18f,.24f,1));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(.75f,.20f,.26f,1));
+        for (int i=0;i<6;i++) if (ImGui::Selectable(g.ui_lang ? en[i] : es[i],section==i,0,ImVec2(0,38*scale))) section=i;
+        ImGui::PopStyleColor(3);
+        ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+        ImGui::TextColored(monado_teal(), "MONADO");
+        ImGui::TextWrapped("%s", g.ui_lang ? "Your world. Your setup." : "Tu mundo. Tu configuración.");
         ImGui::EndChild(); ImGui::SameLine();
-        ImGui::BeginChild("content",ImVec2(0,-bottom),ImGuiChildFlags_Borders);
+        if (shown_section != section) { ImGui::SetNextWindowScroll(ImVec2(0, 0)); shown_section = section; }
+        ImGui::BeginChild("content",ImVec2(0,-bottom),0,ImGuiWindowFlags_AlwaysUseWindowPadding);
         ImGui::PushItemWidth(fminf(340*scale,ImGui::GetContentRegionAvail().x*0.60f));
         switch(section) {
         case 0: tab_home(); break; case 1: tab_graphics(); break; case 2: tab_controls(); break;
@@ -1359,14 +1704,20 @@ int main(int argc, char **argv) {
             if (launched) run = false;
         }
         ImGui::BeginDisabled(!have_game || !have_exe || launched || pc_running() || *g_mismatch_desc);
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.55f, 0.3f, 1));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.7f, 0.4f, 1));
+        ImGui::PushStyleColor(ImGuiCol_Button, monado_crimson());
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.20f, 0.30f, 1));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.96f, 0.30f, 0.38f, 1));
         if (ImGui::Button(T("JUGAR"), ImVec2(200 * scale, 0))) {
             if (!pc_done()) pc_start(true);
             else { launch(); launched = g_launched_ok; if (launched) run = false; }
         }
-        ImGui::PopStyleColor(2);
+        ImGui::PopStyleColor(3);
+        ImGui::EndDisabled();
         ImGui::SameLine();
+        ImGui::BeginDisabled(pc_running() || !have_exe || *g_mismatch_desc);
+        if (ImGui::Button(T("Precompilar shaders"))) pc_start(false);
+        ImGui::SetItemTooltip("%s", g.ui_lang ? "Prepare every shader ahead of time, so new areas don't stop to compile them. Progress is kept."
+                                              : "Prepara todos los shaders por adelantado, para que las zonas nuevas no se paren a compilarlos. El progreso se conserva.");
         ImGui::EndDisabled();
         ImGui::SameLine();
         bool pending=g_mod_dirty || memcmp(&saved_cfg,&g,sizeof g)!=0;
@@ -1374,10 +1725,12 @@ int main(int argc, char **argv) {
             if (save()) { memcpy(&saved_cfg,&g,sizeof g); g_mod_dirty=false; g_status=T("Ajustes guardados en xcde.ini"); }
             else g_status=T("No se pudo escribir xcde.ini");
         }
+        ImGui::SameLine();
+        if (ImGui::Button(T("Salir"))) run=false;
         if (pending) { ImGui::SameLine(); ImGui::TextColored(monado_rgb(0xE4C477),"%s",g.ui_lang ? "Unsaved" : "Sin guardar"); }
         ImGui::End();
         ImGui::Render();
-        SDL_SetRenderDrawColor(ren, 16, 20, 17, 255);
+        SDL_SetRenderDrawColor(ren, 9, 13, 18, 255);
         SDL_RenderClear(ren);
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), ren);
         if (shot && ++frame_no == (shot_pc ? 300 : 5)) {

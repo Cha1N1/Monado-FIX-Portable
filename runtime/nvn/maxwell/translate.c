@@ -65,6 +65,7 @@ typedef struct {
     uint32_t vs_in_comp[32];
     bool uses_branches, uses_cc, uses_local, uses_vid, uses_iid, uses_frag_coord, uses_front_facing, uses_lane;
     bool uses_rscale;  // resolution-scale table (fragment/compute only)
+    bool uses_scaled_gather;  // [XCDE] rgather helper emitted (scaled_gather.h)
     uint32_t flat_mask;           // fragment inputs using constant (flat) interpolation
     uint32_t noperspective_mask;  // fragment inputs using pass (linear) interpolation
     uint32_t omap_target, omap_depth;
@@ -895,6 +896,20 @@ static void emit_texs(Ctx *c, uint64_t w, bool fetch) {
 }
 
 // TLD4S: texture gather ("S" form: 2D only, coordinates in gpr8 / gpr20, results in gpr0 / gpr28 like TEXS).  [XCDE]
+// [XCDE] Scaled gathers: with render scaling, textureGather returns four adjacent PHYSICAL texels, while the game's
+// shader expects the 2x2 footprint of GUEST texels (texelFetch already maps guest coordinates). Dither/mask shaders
+// then drift against the screen and draw a fixed grid over rocks and background. rgather (scaled_gather.h) samples the
+// centres of the four scaled guest texels, keeping gather's component order; unscaled textures use textureGather.
+// Fragment stage, non-integer, non-shadow 2D gathers without offsets only. XCDE_SCALED_GATHER=0: as before.
+static bool scaled_gather(Ctx *c, int slot) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("XCDE_SCALED_GATHER"); on = !e || atoi(e) != 0; }
+    if (!on || !c->glsl || c->stage != STAGE_FRAGMENT || c->info->tex[slot].is_uint || c->info->tex[slot].shadow)
+        return false;
+    c->uses_rscale = c->uses_scaled_gather = true;
+    return true;
+}
+
 // Fields: texture index 36..48, nodep 49 (no scoreboard effect: ignored), dc 50, aoffi 51, component 52..53,
 // fp16 55 (results packed as half pairs). GLSL only; the depth-compare and offset forms fail cleanly until needed.
 static void emit_tld4s(Ctx *c, uint64_t w) {
@@ -913,6 +928,8 @@ static void emit_tld4s(Ctx *c, uint64_t w) {
         sprintf(call, "textureGather(t%d, uvb(vec2(as_type<float>(%s), as_type<float>(%s)), rscale[%d]), %d)", slot, A, Bv, slot + 65, comp);
     } else
         sprintf(call, "textureGather(t%d, vec2(as_type<float>(%s), as_type<float>(%s)), %d)", slot, A, Bv, comp);
+    if (scaled_gather(c, slot))
+        sprintf(call, "rgather(t%d, vec2(as_type<float>(%s), as_type<float>(%s)), rscale[%d].xy, %d)", slot, A, Bv, slot + 1, comp);
     write_tex_result(c, slot, call, 0xF, d0, d1, true, f16);
 }
 
@@ -957,6 +974,8 @@ static void emit_tld4(Ctx *c, uint64_t w) {
     else sprintf(uv, "vec2(%s, %s)", x, y);
     if (dc) sprintf(call, "vec4(textureGather(t%d, %s, %s))", slot, uv, dref);
     else sprintf(call, "textureGather(t%d, %s, %d)", slot, uv, comp);
+    if (!dc && offmode == 0 && scaled_gather(c, slot))
+        sprintf(call, "rgather(t%d, %s, rscale[%d].xy, %d)", slot, uv, slot + 1, comp);
     write_tex_result(c, slot, call, mask, d, RZ, false, false);
 }
 
@@ -2253,6 +2272,8 @@ static const char *glsl_sampler_type(const ShaderTexture *t) {
     return names[ty][t->shadow ? 1 : 0];
 }
 
+#include "scaled_gather.h"
+
 // Declarations + entry point around the (rewritten) body; mirrors the MSL assembly in maxwell_translate.
 static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
     ShaderInfo *info = c->info;
@@ -2323,6 +2344,7 @@ static ShaderInfo *glsl_finish(Ctx *c, bool any_branch, bool dbg) {
         default: sp(&s, "ivec3 tsize%d(int l) { return ivec3(textureSize(t%d, l), 1); }\n", i, i);
         }
     }
+    if (c->uses_scaled_gather) sp(&s, "%s", scaled_gather_glsl);  // [XCDE] rgather
     if (stage == STAGE_VERTEX) {
         for (int i = 0; i < 32; i++) {
             if (!(c->in_attr_mask & (1u << i))) continue;

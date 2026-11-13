@@ -6,7 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <pthread.h>
+#include <unistd.h>
+#endif
 
 #include "../gamelib.h"
 #include "../hle.h"
@@ -15,7 +20,7 @@
 
 const char *g_romfs_dir;
 
-#ifdef XCDE_GFX
+#if defined(XCDE_GFX) && defined(_WIN32)
 // [XCDE] T194: laptops with two GPUs (NVIDIA Optimus / AMD switchable graphics) run a program on the integrated one
 // unless the exe exports these; the driver reads them at start. (device.c then picks the discrete GPU among those
 // Vulkan lists; LARECOMP_GPU=<n> overrides.)
@@ -53,6 +58,7 @@ __attribute__((constructor(101))) static void reserve_guest_space(void) {
     if (!plat_reserve_guest(GUEST_LO, GUEST_HI)) {
         // [XCDE] T135: something the loader placed at random (ASLR) sits in the guest range in ~1 of 5 starts. A new
         // process gets a new layout: start this one again (same command line, same console), up to 8 times.
+#ifdef _WIN32
         char n[16] = "0";
         GetEnvironmentVariableA("XCDE_RELAUNCH", n, sizeof n);
         int tries = atoi(n);
@@ -79,6 +85,17 @@ __attribute__((constructor(101))) static void reserve_guest_space(void) {
                 ExitProcess(code);
             }
         }
+#else
+        // [XCDE] T-LINUX: re-exec preserves arguments and the AppImage mount.
+        const char *retry = getenv("XCDE_RELAUNCH");
+        int tries = retry ? atoi(retry) : 0;
+        if (tries < 8) {
+            char n[16];
+            snprintf(n, sizeof n, "%d", tries + 1);
+            setenv("XCDE_RELAUNCH", n, 1);
+            plat_exec(NULL);
+        }
+#endif
         fprintf(stderr, "FATAL: guest address range %llx-%llx is not free\n", (unsigned long long)GUEST_LO,
                 (unsigned long long)GUEST_HI);
         exit(1);
@@ -86,9 +103,14 @@ __attribute__((constructor(101))) static void reserve_guest_space(void) {
 }
 
 // [XCDE] Watchdog (T027, first version): every few seconds the state of every guest thread; XCDE_WATCHDOG=<seconds>.
-static DWORD WINAPI watchdog_main(LPVOID p) {
+#ifdef _WIN32
+static DWORD WINAPI watchdog_main(LPVOID p)
+#else
+static void *watchdog_main(void *p)
+#endif
+{
     unsigned secs = (unsigned)(uintptr_t)p;
-    for (;;) { Sleep(secs * 1000); LOG("[wd] ---- %u s ----"" %c", secs, 10); kernel_dump_threads(stderr); }
+    for (;;) { plat_sleep_until_ns(plat_now_ns() + (uint64_t)secs * 1000000000); LOG("[wd] ---- %u s ----"" %c", secs, 10); kernel_dump_threads(stderr); }
 }
 
 
@@ -112,7 +134,15 @@ int main(int argc, char **argv) {
     g_romfs_dir = strdup(romfs);
 
     diag_watchdog_start();
+#ifdef _WIN32
     if (getenv("XCDE_WATCHDOG")) CreateThread(NULL, 0, watchdog_main, (LPVOID)(uintptr_t)atoi(getenv("XCDE_WATCHDOG")), 0, NULL);
+#else
+    const char *wd = getenv("XCDE_WATCHDOG");
+    if (wd && atoi(wd) > 0) {
+        pthread_t thread;
+        if (!pthread_create(&thread, NULL, watchdog_main, (void *)(uintptr_t)atoi(wd))) pthread_detach(thread);
+    }
+#endif
     loader_load(exefs);
     kernel_init();
     dispatch_init();

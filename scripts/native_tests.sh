@@ -28,7 +28,7 @@ $Z -std=c11 -Wall -Wextra -Werror -o build/test/test_port_core.exe tests/native/
 build/test/test_port_core.exe build/test/port-core.ini
 $Z -std=c11 -Wall -Wextra -Werror -o build/test/test_gpu_probe.exe tests/native/test_gpu_probe.c
 build/test/test_gpu_probe.exe
-$Z -std=c11 -Wall -Wextra -Werror -o build/test/test_settings_roundtrip.exe tests/native/test_settings_roundtrip.c runtime/host/settings_ini.c runtime/hle/graphics.c
+$Z -std=c11 -Wall -Wextra -Werror -o build/test/test_settings_roundtrip.exe tests/native/test_settings_roundtrip.c runtime/host/settings_ini.c runtime/hle/graphics.c runtime/hle/foliage_distance.c
 build/test/test_settings_roundtrip.exe build/test/settings-roundtrip.ini
 $Z -std=c11 -O1 -w -Iruntime -o build/test/test_graphics_options.exe tests/native/test_graphics_options.c runtime/hle/graphics.c  # [XCDE]
 build/test/test_graphics_options.exe

@@ -1,16 +1,19 @@
 // User settings (larecomp.ini next to the executable's working directory), edited from the in-game menu.
 #pragma once
 #include <stdbool.h>
+#include "grass_lod.h"
 #include "graphics_options.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 enum { ASPECT_UNLOCKED = 0, ASPECT_ORIGINAL = 1 };
-enum { RES_MATCH = 0, /* 1..8 = 1x..8x */ RES_DYNAMIC = 9, RES_Q75 = 10, RES_Q25 = 11, RES_Q50 = 12 };
+enum { RES_MATCH = 0, /* 1..8 = 1x..8x */ RES_DYNAMIC = 9, RES_Q75 = 10, RES_Q25 = 11, RES_Q50 = 12,
+       RES_1_5 = 13 /* 1.5x the game's frame: 1080p for XCDE */ };
 // (11 was 67% of the display: larecomp.ini "67%" now loads as RES_Q75)
 enum { UPSCALE_BILINEAR = 0, UPSCALE_METALFX = 1 /* macOS */, UPSCALE_FSR1 = 2 /* Windows: AMD FSR 1 */,
-       UPSCALE_FSR3 = 3 /* [XCDE] AMD FSR 3.1 (temporal) */, UPSCALE_DLSS = 4 /* [XCDE] NVIDIA DLSS (temporal) */ };
+       UPSCALE_FSR3 = 3 /* [XCDE] AMD FSR 3.1 (temporal) */, UPSCALE_DLSS = 4 /* [XCDE] NVIDIA DLSS (temporal) */,
+       UPSCALE_FSR4_LITE = 5 /* [XCDE] T-FSR4-LITE: native Vulkan FSR 4.1.2 Lite INT8 (Linux) */ };
 // [XCDE] temporal upscalers' quality mode: render size = output / ratio (1, 1.5, 1.7, 2, 3)
 enum { UQ_NATIVE = 0, UQ_QUALITY = 1, UQ_BALANCED = 2, UQ_PERFORMANCE = 3, UQ_ULTRA = 4 };
 #ifdef __APPLE__
@@ -41,7 +44,7 @@ extern const char *const g_language_names[N_LANGUAGES];  // for the menu ("Auto"
 typedef struct {
     int aspect;          // ASPECT_*: unlocked = fill the window (wider/taller views), original = 16:9 with bars
     bool fullscreen;
-    int res_mode;        // RES_MATCH, 1..4 (N x the Switch's 1080p), RES_DYNAMIC, RES_Q75/50/25 (share of the display)
+    int res_mode;        // RES_MATCH, 1..8 (N x the game's frame), RES_1_5 (1.5x), RES_DYNAMIC, RES_Q75/50/25 (share of the display)
     int upscaler;        // UPSCALE_*: how a lower internal resolution reaches the window (MetalFX: macOS, FSR 1: Windows)
     int antialias;       // AA_*: anti-aliasing of the game image before it is scaled to the window
     float volume;        // master volume, 1 = 100%
@@ -83,6 +86,7 @@ typedef struct {
     bool game_blur;      // [XCDE] the game's own AA / temporal AA / motion blur (lib_nx.ini; xcde.ini game_blur = 0/1)
     int upscale_quality; // [XCDE] UQ_*: FSR 3 / DLSS render size (xcde.ini upscale_quality = native|quality|balanced|performance|ultra)
     bool frame_gen;      // [XCDE] FSR 3 / DLSS frame generation (xcde.ini frame_gen = 0/1)
+    float upscale_sharpness; // [XCDE] RCAS strength 0 (off) .. 1 (max); < 0: each upscaler's own default (xcde_sharpness)
     int ui_lang;         // [XCDE] launcher and F1-menu language: 0 Spanish, 1 English (xcde.ini launcher_lang = es | en)
     int stick_deadzone;  // [XCDE] % of the stick's travel read as centred (xcde.ini stick_deadzone = 0-30, default 0: raw)
     int cutscene_mode;   // [XCDE] T224: 0 cutscenes at the FPS setting, 1 at 30, 2 at 30 + FSR 3 frame generation (xcde.ini cutscenes = same|30|30fg)
@@ -98,6 +102,7 @@ typedef struct {
     int occlusion;       // OCCL_*; occlusion-culling override (restart): auto = off on AMD iGPUs, GitHub #14
     int amd_fix;         // AMD_FIX_*; RDNA 3 glitch mitigation (restart), GitHub #7
     int session_fix;     // SESSION_FIX_*; no async render worker (restart), GitHub #25
+    int grass_lod;       // [XCDE] GRASS_*: grass draw distance, applied on the next guest foliage pass (no restart)
     GraphicsOptions graphics;  // [XCDE] T-GRAPHICS-SCALABILITY: 0 = original everywhere; most apply live
     bool gpu_memory_budget; // use VK_EXT_memory_budget when exposed; informational allocator support
     bool input_rumble;   // [XCDE] hand rumble through to SDL when the game vibrates (hid cmds 201+hid_set.c)
@@ -120,3 +125,10 @@ const char *settings_language_name(void);
 #ifdef __cplusplus
 }
 #endif
+
+// [XCDE] RCAS strength in FSR's 0..1 convention (attenuation = 2 - 2 * sharpness stops). Unset (< 0), each upscaler
+// keeps its previous fixed value: FSR 1 sharpened at 0.2 stops (= 0.9), FSR 3's dispatch used 0.3.
+static inline float xcde_sharpness(const Settings *s) {
+    if (s->upscale_sharpness >= 0.0f) return s->upscale_sharpness > 1.0f ? 1.0f : s->upscale_sharpness;
+    return s->upscaler == UPSCALE_FSR1 ? 0.9f : 0.3f;
+}
