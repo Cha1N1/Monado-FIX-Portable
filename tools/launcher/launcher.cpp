@@ -170,9 +170,10 @@ static int icons_effective(int sel) {
 static const char *const k_ups_ini[] = {"bilinear", "fsr", "fsr3", "dlss", "fsr4lite"};
 static const char *const k_uq_ini[] = {"native", "quality", "balanced", "performance", "ultra"};
 static const char *const k_wins[] = {"1280x720", "1600x900", "1920x1080", "2560x1440", "3840x2160"};
-static const char *const k_res_ini[] = {"match", "1", "2", "3", "75%", "50%", "dynamic"};
-static const char *const k_res_ui[] = {"Igual que la ventana (recomendado)", "1x - 720p (como Switch)", "2x - 1440p",
-                                       "3x - 2160p (4K)", "75% de la ventana", "50% de la ventana", "Dinámica (según rendimiento)"};
+static const char *const k_res_ini[] = {"match", "1", "1.5", "2", "3", "75%", "50%", "dynamic"};
+static const char *const k_res_ui[] = {"Igual que la ventana (recomendado)", "1x - 720p (como Switch)", "1.5x - 1080p",
+                                       "2x - 1440p", "3x - 2160p (4K)", "75% de la ventana", "50% de la ventana",
+                                       "Dinámica (según rendimiento)"};
 static const char *const k_fps_ini[] = {"30", "60", "120", "144", "165", "unlimited"};
 static const char *const k_lang_ini[] = {"auto", "en-US", "es", "fr", "de", "it", "ja", "ko", "zh-Hans", "zh-Hant"};
 static const char *const k_lang_ui[] = {"Inglés (por defecto)", "Inglés", "Español", "Francés", "Alemán", "Italiano", "Japonés", "Coreano", "Chino simplificado", "Chino tradicional"};
@@ -447,7 +448,7 @@ static void load() {
         if (!strcmp(k, "fullscreen")) g.fullscreen = atoi(v) != 0;
         else if (!strcmp(k, "aspect")) g.aspect = !strcmp(v, "original") ? ASPECT_ORIGINAL : ASPECT_UNLOCKED;
         else if (!strcmp(k, "window") && (i = find(k_wins, 5, v)) >= 0) g.win = i;
-        else if (!strcmp(k, "resolution") && (i = find(k_res_ini, 7, v)) >= 0) g.res = i;
+        else if (!strcmp(k, "resolution") && (i = find(k_res_ini, 8, v)) >= 0) g.res = i;
         else if (!strcmp(k, "upscaler")) { g.upscaler_auto = !strcmp(v, "auto"); g.upscaler = !strcmp(v, "fsr") || g.upscaler_auto ? 1 : !strcmp(v, "fsr3") ? 2 : !strcmp(v, "dlss") ? 3 : !strcmp(v, "fsr4lite") ? 4 : 0; }
         else if (!strcmp(k, "upscale_quality") && (i = find(k_uq_ini, 5, v)) >= 0) g.uquality = i;
         else if (!strcmp(k, "upscale_sharpness")) {
@@ -890,11 +891,11 @@ static bool capture_event(const SDL_Event &e) {
 // [XCDE] T259: adapt the legacy launcher model at one boundary; policy lives in quality_policy.h.
 static Settings quality_settings() {
     Settings v{};
-    static const int resolutions[]={RES_MATCH,1,2,3,RES_Q75,RES_Q50,RES_DYNAMIC};
+    static const int resolutions[]={RES_MATCH,1,RES_1_5,2,3,RES_Q75,RES_Q50,RES_DYNAMIC};
     static const int upscalers[]={UPSCALE_BILINEAR,UPSCALE_FSR1,UPSCALE_FSR3,UPSCALE_DLSS,UPSCALE_FSR4_LITE};
     static const int fps[]={30,60,120,144,165,0};
     v.quality_preset=g.quality_preset; v.gpu_performance=g.gpu_performance;
-    v.res_mode=resolutions[std::clamp(g.res,0,6)]; v.upscaler=upscalers[std::clamp(g.upscaler,0,4)];
+    v.res_mode=resolutions[std::clamp(g.res,0,7)]; v.upscaler=upscalers[std::clamp(g.upscaler,0,4)];
     v.upscaler_auto=g.upscaler_auto; v.antialias=g.smaa ? AA_SMAA : AA_OFF;
     v.upscale_quality=g.uquality;
     v.dof_off=!g.dof; v.game_blur=g.game_blur; v.frame_gen=g.frame_gen;
@@ -903,10 +904,10 @@ static Settings quality_settings() {
     v.cutscene_mode=g.cut_fg ? 2 : g.cutscenes ? 1 : 0; return v;
 }
 static void quality_from_settings(const Settings &v) {
-    static const int resolutions[]={RES_MATCH,1,2,3,RES_Q75,RES_Q50,RES_DYNAMIC};
+    static const int resolutions[]={RES_MATCH,1,RES_1_5,2,3,RES_Q75,RES_Q50,RES_DYNAMIC};
     static const int upscalers[]={UPSCALE_BILINEAR,UPSCALE_FSR1,UPSCALE_FSR3,UPSCALE_DLSS,UPSCALE_FSR4_LITE};
     static const int fps[]={30,60,120,144,165,0};
-    for (int i=0;i<7;i++) if (resolutions[i]==v.res_mode) g.res=i;
+    for (int i=0;i<8;i++) if (resolutions[i]==v.res_mode) g.res=i;
     for (int i=0;i<5;i++) if (upscalers[i]==v.upscaler) g.upscaler=i;
     for (int i=0;i<6;i++) if (fps[i]==v.fps) g.fps=i;
     g.quality_preset=v.quality_preset; g.gpu_performance=v.gpu_performance;
@@ -1023,7 +1024,7 @@ static void tab_graphics() {
     monado_combo(T("Tamaño de la ventana"), &g.win, k_wins, 5);
     ImGui::SeparatorText(T("Resolución y escalado"));
     ImGui::SetNextItemWidth(360 * g_scale);
-    monado_combo(T("Resolución interna"), &g.res, TL(k_res_ui, 7).p, 7);
+    monado_combo(T("Resolución interna"), &g.res, TL(k_res_ui, 8).p, 8);
     ImGui::TextDisabled(T("El juego original renderiza a 720p. Más resolución = imagen más nítida y más carga para la GPU."));
     const char *ups[] = {"Bilineal (suave)", "AMD FSR 1.0 (nítido)", "AMD FSR 3.1 (temporal, cualquier GPU)",
                          "NVIDIA DLSS (temporal, GPU RTX)", "AMD FSR 4 Lite (temporal, nativo)"};

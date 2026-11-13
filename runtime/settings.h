@@ -7,7 +7,8 @@ extern "C" {
 #endif
 
 enum { ASPECT_UNLOCKED = 0, ASPECT_ORIGINAL = 1 };
-enum { RES_MATCH = 0, /* 1..8 = 1x..8x */ RES_DYNAMIC = 9, RES_Q75 = 10, RES_Q25 = 11, RES_Q50 = 12 };
+enum { RES_MATCH = 0, /* 1..8 = 1x..8x */ RES_DYNAMIC = 9, RES_Q75 = 10, RES_Q25 = 11, RES_Q50 = 12,
+       RES_1_5 = 13 /* 1.5x the game's frame: 1080p for XCDE */ };
 // (11 was 67% of the display: larecomp.ini "67%" now loads as RES_Q75)
 enum { UPSCALE_BILINEAR = 0, UPSCALE_METALFX = 1 /* macOS */, UPSCALE_FSR1 = 2 /* Windows: AMD FSR 1 */,
        UPSCALE_FSR3 = 3 /* [XCDE] AMD FSR 3.1 (temporal) */, UPSCALE_DLSS = 4 /* [XCDE] NVIDIA DLSS (temporal) */,
@@ -42,7 +43,7 @@ extern const char *const g_language_names[N_LANGUAGES];  // for the menu ("Auto"
 typedef struct {
     int aspect;          // ASPECT_*: unlocked = fill the window (wider/taller views), original = 16:9 with bars
     bool fullscreen;
-    int res_mode;        // RES_MATCH, 1..4 (N x the Switch's 1080p), RES_DYNAMIC, RES_Q75/50/25 (share of the display)
+    int res_mode;        // RES_MATCH, 1..8 (N x the game's frame), RES_1_5 (1.5x), RES_DYNAMIC, RES_Q75/50/25 (share of the display)
     int upscaler;        // UPSCALE_*: how a lower internal resolution reaches the window (MetalFX: macOS, FSR 1: Windows)
     int antialias;       // AA_*: anti-aliasing of the game image before it is scaled to the window
     float volume;        // master volume, 1 = 100%

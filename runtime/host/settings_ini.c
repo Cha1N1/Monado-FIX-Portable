@@ -71,12 +71,13 @@ void settings_load(void) {
         if (!strcmp(k, "fullscreen")) g_settings.fullscreen = atoi(v) != 0;
         else if (!strcmp(k, "aspect")) g_settings.aspect = !strcmp(v, "original") ? ASPECT_ORIGINAL : ASPECT_UNLOCKED;
         else if (!strcmp(k, "window")) sscanf(v, "%dx%d", &g_window_w, &g_window_h);
-        else if (!strcmp(k, "resolution")) {  // match | 1x..4x | 75% | 50% | 25% | dynamic
+        else if (!strcmp(k, "resolution")) {  // match | 1x..8x | 1.5x | 75% | 50% | 25% | dynamic
             if (!strcmp(v, "match")) g_settings.res_mode = RES_MATCH;
             else if (!strcmp(v, "dynamic")) g_settings.res_mode = RES_DYNAMIC;
             else if (!strcmp(v, "75%")) g_settings.res_mode = RES_Q75;
             else if (!strcmp(v, "50%")) g_settings.res_mode = RES_Q50;
             else if (!strcmp(v, "25%")) g_settings.res_mode = RES_Q25;
+            else if (!strcmp(v, "1.5")) g_settings.res_mode = RES_1_5;
             else if (atoi(v) >= 1 && atoi(v) <= 8) g_settings.res_mode = atoi(v);
         } else if (!strcmp(k, "upscaler")) {
             g_settings.upscaler_auto = !strcmp(v, "auto");
@@ -149,11 +150,11 @@ void settings_save(void) {
     char tmp[1200];
     FILE *f = xcde_ini_begin(ini_path(), tmp, sizeof tmp);
     if (!f) return;
-    static const char *res[] = {"match", "1", "2", "3", "4", "5", "6", "7", "8", "dynamic", "75%", "25%", "50%"};
+    static const char *res[] = {"match", "1", "2", "3", "4", "5", "6", "7", "8", "dynamic", "75%", "25%", "50%", "1.5"};
     fprintf(f, "# Monado settings (the launcher writes this file)\n");
     fprintf(f, "fullscreen = %d\nwindow = %dx%d\n", g_settings.fullscreen, g_window_w, g_window_h);
     fprintf(f, "aspect = %s\n", g_settings.aspect == ASPECT_ORIGINAL ? "original" : "auto");
-    fprintf(f, "resolution = %s\n", g_settings.res_mode >= 0 && g_settings.res_mode <= 12 ? res[g_settings.res_mode] : "match");
+    fprintf(f, "resolution = %s\n", g_settings.res_mode >= 0 && g_settings.res_mode <= RES_1_5 ? res[g_settings.res_mode] : "match");
     static const char *up[] = {"bilinear", "bilinear", "fsr", "fsr3", "dlss", "fsr4lite"};
     static const char *uq[] = {"native", "quality", "balanced", "performance", "ultra"};
     fprintf(f, "upscaler = %s\nantialias = %s\n", g_settings.upscaler_auto ? "auto" : up[g_settings.upscaler >= 0 && g_settings.upscaler <= 5 ? g_settings.upscaler : 0],
