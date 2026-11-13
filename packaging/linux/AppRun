@@ -11,8 +11,16 @@
 set -eu
 appdir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 export LD_LIBRARY_PATH="$appdir/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export MONADO_FSR4_ASSET_DIR="${MONADO_FSR4_ASSET_DIR:-$appdir/usr/share/monado/fsr4}"
+# FSR 4 Lite's model files: packaged (a local build with --fsr4-assets), else the data folder's fsr4/, which the
+# launcher's "Prepare FSR 4 Lite" fills on this PC (runtime/nvn/vulkan/fsr4.c looks there by itself)
+if [ -f "$appdir/usr/share/monado/fsr4/lite/t1080_m0/initializer.bin" ]; then
+  export MONADO_FSR4_ASSET_DIR="${MONADO_FSR4_ASSET_DIR:-$appdir/usr/share/monado/fsr4}"
+fi
 export XCDE_VARIANTS_SEED="${XCDE_VARIANTS_SEED:-$appdir/usr/share/monado/variants_seed.bin}"
+# Release AppImages: FSR 4 Lite's preparation tool (the launcher's "Prepare FSR 4 Lite")
+if [ -x "$appdir/usr/share/monado/fsr4prep/monado-fsr4prep" ]; then
+  export XCDE_FSR4PREP_DIR="${XCDE_FSR4PREP_DIR:-$appdir/usr/share/monado/fsr4prep}"
+fi
 # Release AppImages: the first-start game code builder (the launcher runs it once; the result goes to the data folder)
 if [ -f "$appdir/usr/share/monado/gamebuild/link.json" ]; then
   export XCDE_GAMEBUILD_DIR="${XCDE_GAMEBUILD_DIR:-$appdir/usr/share/monado/gamebuild}"

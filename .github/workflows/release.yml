@@ -8,9 +8,9 @@
 #
 # Upscalers: FSR 1 always; FSR 3 (Linux: native component built from AMD's SDK source; Windows: AMD's signed DLL from
 # the official FidelityFX SDK 1.1.4 release); DLSS on Windows (NVIDIA's official Streamline release,
-# tools/install_dlss.py, hash-pinned); the FSR 4 Lite component on both. FSR 4 Lite's model files are NOT packaged:
-# they are derived from AMD's SDK (tools/prepare_fsr4_lite.py, Linux + Proton) and are meant to be prepared on the
-# player's own PC; until then FSR 4 Lite is unavailable in these packages and the runtime falls back to FSR 1.
+# tools/install_dlss.py, hash-pinned); FSR 4 Lite on both. FSR 4 Lite's model files are NOT packaged (they are
+# derived from AMD's SDK): the packages carry the preparation tool (tools/build_fsr4prep.py) and the launcher's
+# "Prepare FSR 4 Lite" makes them once on the player's PC from AMD's own download.
 name: release
 on:
   workflow_dispatch:
@@ -81,6 +81,8 @@ jobs:
           test -f build/linux/libmonado_fsr4.so || { echo "::error::native FSR 4 Lite was not built"; exit 1; }
       - name: Freeze the builder
         run: .venv/bin/python tools/freeze_gamebuild.py --python .venv/bin/python
+      - name: FSR 4 Lite preparation tool
+        run: .venv/bin/python tools/build_fsr4prep.py
       - name: appimagetool (pinned)
         run: |
           curl -fsSL -o /tmp/appimagetool "$APPIMAGETOOL_URL"
@@ -112,14 +114,14 @@ jobs:
           install: >-
             mingw-w64-ucrt-x86_64-sdl3 mingw-w64-ucrt-x86_64-ffmpeg mingw-w64-ucrt-x86_64-vulkan-devel
             mingw-w64-ucrt-x86_64-shaderc mingw-w64-ucrt-x86_64-vulkan-memory-allocator mingw-w64-ucrt-x86_64-opus
-            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-zlib mingw-w64-ucrt-x86_64-gcc
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Python tools (recompiler, zig, CMake, Ninja, PyInstaller)
         run: |
           python -m venv .venv
-          .venv\Scripts\python -m pip install -q "ziglang==$env:ZIG_VERSION" capstone==5.0.9 unicorn==2.1.4 lz4==4.4.5 cmake ninja pyinstaller
+          .venv\Scripts\python -m pip install -q "ziglang==$env:ZIG_VERSION" capstone==5.0.9 unicorn==2.1.4 lz4==4.4.5 cmake ninja pyinstaller zstandard
       - name: AMD FSR 3 runtime (official FidelityFX SDK 1.1.4) and NVIDIA DLSS (official Streamline, hash-pinned)
         run: |
           Invoke-WebRequest -Uri $env:FFX_URL -OutFile ffx.zip
@@ -146,6 +148,10 @@ jobs:
           }
       - name: Freeze the builder
         run: .venv\Scripts\python tools/freeze_gamebuild.py --python .venv\Scripts\python.exe
+      - name: FSR 4 Lite preparation tool
+        run: |
+          $env:PATH = "$PWD\.venv\Scripts;C:\msys64\ucrt64\bin;$env:PATH"
+          .venv\Scripts\python tools/build_fsr4prep.py
       - name: Package the ZIP (checked with tools/package_guard.py)
         run: |
           .venv\Scripts\python tools/make_portable.py "$env:RUNNER_TEMP\Monado-Windows" --release --msys C:\msys64\ucrt64\bin

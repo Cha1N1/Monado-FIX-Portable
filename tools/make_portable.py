@@ -294,6 +294,9 @@ def main():
             copy_tree(lite, os.path.join(out, 'build', 'fsr4', 'lite'), 'FSR 4 Lite model files/')
             shutil.copy2(os.path.join('third_party', 'fsr4_native', 'LICENSE-AMD-SDK.md'),
                          os.path.join(out, 'build', 'fsr4', 'LICENSE-AMD-SDK.md'))
+        elif os.path.isfile(os.path.join('build', 'fsr4prep', 'monado-fsr4prep.exe')):
+            # no model files: the launcher's "Prepare FSR 4 Lite" makes them on the player's PC (build/fsr4prep)
+            copy_tree(os.path.join('build', 'fsr4prep'), os.path.join(out, 'build', 'fsr4prep'), 'FSR 4 Lite preparation tool/')
         else:
             print('  note: monado_fsr4.dll without its model files (--with-fsr4-assets): FSR 4 Lite will be unavailable')
     if os.path.isdir(os.path.join('build', 'dlss-licenses')):
