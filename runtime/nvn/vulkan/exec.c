@@ -21,6 +21,7 @@
 #include "../../kernel.h"
 #include "shaders.h"
 #include "vk.h"
+#include "bloom_prefilter.h"  // [XCDE] T-BLOOM-PREFILTER
 #include "temporal.h"
 void vk_watch(VkImage dst, const char *site);  // [XCDE] debugging: log writes to a watched image
 static VkImage g_watch_img;
@@ -2114,10 +2115,24 @@ static void save_glsl(const char *src, uint64_t addr, const char *suffix) {
     if (f) { fputs(src, f); fclose(f); }
 }
 
+// [XCDE] T-BLOOM-PREFILTER (bloom_prefilter.h): matched by the guest program's code (the draw-time fragment
+// hash), so every translated variant of it is replaced; the replacement source has its own SPIR-V cache identity.
+static const char *bloom_prefilter_src(uint64_t code) {
+    static int mode = -1;
+    if (mode < 0) { const char *e = getenv("XCDE_BLOOM_PREFILTER"); mode = e ? atoi(e) : 2; }
+    if (!mode || !code) return NULL;
+    if (hmix(1469598103934665603ull, (const void *)(uintptr_t)(code + 0x30), 0x200) != 0x2aa23b65117ab1a5ull) return NULL;
+    static int reported;
+    if (!__atomic_exchange_n(&reported, 1, __ATOMIC_RELAXED))
+        LOG("[bloom] full-footprint prefilter enabled%s\n", mode == 1 ? " (no firefly weighting)" : " (firefly weighting)");
+    return mode == 1 ? monado_bloom_prefilter_box_glsl : monado_bloom_prefilter_karis_glsl;
+}
+
 static void compile_program(void *arg) {
     Prog *p = arg;
     size_t nv = 0, nf = 0;
     const char *fs_src = p->fi->msl;
+    { const char *b = bloom_prefilter_src(p->src[1]); if (b) fs_src = b; }
     char *fs_over = NULL;
     if (getenv("XCDE_GLSL_DIR")) {  // [XCDE] debugging: a hand-edited fragment shader (<dir>/<code addr>_fs.glsl) replaces the translated one
         char path[512];
