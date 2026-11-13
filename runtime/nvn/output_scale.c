@@ -123,6 +123,18 @@ void output_scale(double dw, double dh, bool reshape_allowed, double now, double
     double sx = h * shape, sy = h;
     double cap = fmin(MAX_TEX / (g_base_w * sx), MAX_TEX / (g_base_h * sy));
     if (cap < 1.0) { sx *= cap; sy *= cap; }
+    // [XCDE] Balanced (1.7x) is the one temporal-upscaler ratio that does not divide the frame into whole pixels: 4K
+    // gives 2259x1271, 1440p 1506x847, 1080p 1129x635. The game's half / quarter-resolution targets are then sized and
+    // sampled off a fractional grid, and with the upscaler's sub-pixel jitter the image shakes. Snap the render size to a
+    // multiple of eight (4K: 2256x1272), as the other presets already land on; the output and aspect stay the same.
+    // XCDE_BALANCED_GRID=0: the exact 1.7x size.
+    static int snap = -1;
+    if (snap < 0) { const char *e = getenv("XCDE_BALANCED_GRID"); snap = !(e && *e == '0'); }
+    if (snap && mode == RES_MATCH && forced <= 0 && g_settings.upscale_quality == UQ_BALANCED &&
+        (g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_DLSS || g_settings.upscaler == UPSCALE_FSR4_LITE)) {
+        double rw = fmax(8.0, round(g_base_w * sx / 8.0) * 8.0), rh = fmax(8.0, round(g_base_h * sy / 8.0) * 8.0);
+        sx = rw / g_base_w; sy = rh / g_base_h;
+    }
     o->sx = sx; o->sy = sy; o->shape = shape;
     // where the image goes in the window: fills it when reshaped, else a fitted 16:9 box
     if (reshape) { o->vw = dw; o->vh = dh; }
