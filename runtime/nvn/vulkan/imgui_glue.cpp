@@ -6,6 +6,7 @@
 extern "C" {
 #include "vk.h"
 }
+#include "vkq.h"  // [XCDE] T-LINUX-THREE
 
 // Per ImGui context (the start screen and the in-game menu each have one, and the start screen comes back after an
 // in-place reboot while the menu's context lives on): the backend keeps its data in the current context.
@@ -34,6 +35,7 @@ extern "C" bool vk_imgui_backend_init(void) {
 
 extern "C" void vk_imgui_backend_shutdown(void) {
     if (!ImGui::GetIO().BackendRendererUserData) return;
+    vkq_drain();
     vkDeviceWaitIdle(g_vk.dev);
     ImGui_ImplVulkan_Shutdown();
 }

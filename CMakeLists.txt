@@ -26,11 +26,11 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 # ---- unit lists: the one place a new runtime file is added ----
 set(RT_UNITS loader dispatch kernel ipc fnprof services/fs services/romfs_virtual services/am services/acc services/time
     services/hid_set services/kbicons services/misc services/audio services/hwopus hle/heaps hle/pl hle/vi hle/nvn_boot
-    hle/fibers hle/input hle/party hle/bindings hle/movie hle/framepace hle/foliage_distance hle/foliage_pool
+    hle/fibers hle/input hle/party hle/bindings hle/movie hle/framepace hle/foliage_distance hle/foliage_pool hle/graphics
     host/stubs host/settings_ini host/stubs_gfx host/gamelib_static host/main_boot diag/diag diag/sampler diag/watchdog
     diag/crashdump paths)
 set(NVN_UNITS astc cmdbuf formats maxwell/translate objects output_scale smaa_data tegra texpatch vulkan/device
-    vulkan/exec vulkan/precompile vulkan/shaders vulkan/textures vulkan/temporal vulkan/fsr4)
+    vulkan/exec vulkan/precompile vulkan/shaders vulkan/textures vulkan/temporal vulkan/vkq vulkan/fsr4)
 set(IMGUI third_party/imgui)
 set(UI_SOURCES ${IMGUI}/imgui.cpp ${IMGUI}/imgui_draw.cpp ${IMGUI}/imgui_tables.cpp ${IMGUI}/imgui_widgets.cpp
     ${IMGUI}/backends/imgui_impl_vulkan.cpp runtime/nvn/vulkan/imgui_glue.cpp runtime/ui/menu_vk.cpp)

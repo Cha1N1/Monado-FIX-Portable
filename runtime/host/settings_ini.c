@@ -10,6 +10,7 @@
 #include "../quality_policy.h"
 #include "ini_writer.h"
 #include "../hle/foliage_distance.h"
+#include "../graphics_options.h"
 
 const char *const g_language_codes[N_LANGUAGES] = {"", "ja", "en-US", "fr", "de", "it", "es", "zh-CN", "ko", "nl", "pt", "ru", "zh-Hans", "zh-Hant"};
 const char *const g_language_names[N_LANGUAGES] = {"Auto", "Japanese", "English", "French", "German", "Italian", "Spanish",
@@ -130,10 +131,11 @@ void settings_load(void) {
         else if (!strcmp(k, "language")) g_settings.language = lang_index(v);
         else if (!strncmp(k, "mod_", 4)) mod_set(k + 4, atoi(v) != 0);
         else if (!strcmp(k, "button_icons")) snprintf(g_button_icons, sizeof g_button_icons, "%s", v);
-        else bind_settings_load(k, v);
+        else if (!gfx_load_key(&g_settings.graphics, k, v)) bind_settings_load(k, v);  // [XCDE] graphics options
     }
     fclose(f);
     xcde_foliage_configure(g_settings.grass_lod);  // [XCDE] the saved grass preset
+    xcde_graphics_publish(&g_settings.graphics);
     if (g_window_w < 320) g_window_w = 320;
     if (g_window_h < 180) g_window_h = 180;
     if (g_settings.volume < 0) g_settings.volume = 0;
@@ -179,6 +181,7 @@ void settings_save(void) {
             g_settings.gpu_memory_budget);
     fprintf(f, "rumble = %d\n", g_settings.input_rumble);
     fprintf(f, "grass_lod = %s\n", grass_lod_ini[grass_lod_valid(g_settings.grass_lod)]);  // [XCDE]
+    gfx_save(f, &g_settings.graphics);  // [XCDE]
     fprintf(f, "party_switch = %d\n", g_party_switch);
     fprintf(f, "vulkan_api = %s\nfps_overlay = %d\n", g_settings.vulkan_api == 12 ? "1.2" : g_settings.vulkan_api == 13 ? "1.3" : g_settings.vulkan_api == 14 ? "1.4" : "auto", g_settings.fps_overlay);
     fprintf(f, "gpu_uuid = %s\ngpu_preset = %s\ngpu_keep_heavy = %d\n", g_settings.gpu_uuid,

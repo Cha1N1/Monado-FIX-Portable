@@ -2,6 +2,7 @@
 #pragma once
 #include <stdbool.h>
 #include "grass_lod.h"
+#include "graphics_options.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -102,6 +103,7 @@ typedef struct {
     int amd_fix;         // AMD_FIX_*; RDNA 3 glitch mitigation (restart), GitHub #7
     int session_fix;     // SESSION_FIX_*; no async render worker (restart), GitHub #25
     int grass_lod;       // [XCDE] GRASS_*: grass draw distance, applied on the next guest foliage pass (no restart)
+    GraphicsOptions graphics;  // [XCDE] T-GRAPHICS-SCALABILITY: 0 = original everywhere; most apply live
     bool gpu_memory_budget; // use VK_EXT_memory_budget when exposed; informational allocator support
     bool input_rumble;   // [XCDE] hand rumble through to SDL when the game vibrates (hid cmds 201+hid_set.c)
     bool taa_off;        // [XCDE] remove only the game's temporal AA (lib_nx.ini tmaa): xcde.ini taa = 0 (default 1: kept)
