@@ -1,0 +1,31 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base", "hidden": true, "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/cmake/${presetName}",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "", "CMAKE_EXPORT_COMPILE_COMMANDS": "ON" }
+    },
+    {
+      "name": "windows", "inherits": "base", "displayName": "Windows (zig cc from .venv, MSYS2 UCRT64 libraries)",
+      "toolchainFile": "${sourceDir}/cmake/zig.cmake",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "linux", "inherits": "base", "displayName": "Linux (system clang)",
+      "cacheVariables": { "CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++" },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+    },
+    {
+      "name": "linux-zig", "inherits": "base", "displayName": "Linux (zig cc from .venv)",
+      "toolchainFile": "${sourceDir}/cmake/zig.cmake",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows", "configurePreset": "windows" },
+    { "name": "linux", "configurePreset": "linux" },
+    { "name": "linux-zig", "configurePreset": "linux-zig" }
+  ]
+}

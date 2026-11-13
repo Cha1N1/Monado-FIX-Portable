@@ -1,0 +1,15 @@
+# scripts/copy_upscaler_dlls.sh as a CMake script: copy the AMD FidelityFX (FSR 3.1) and NVIDIA Streamline (DLSS)
+# runtime DLLs from SDK_DIR beside the executable in OUT when they are newer. A missing DLL only leaves that upscaler
+# unavailable. (Vendor binaries: never in git.)
+foreach(f ffx/PrebuiltSignedDLL/amd_fidelityfx_vk.dll sl/bin/x64/sl.interposer.dll sl/bin/x64/sl.common.dll
+          sl/bin/x64/sl.dlss.dll sl/bin/x64/nvngx_dlss.dll sl/bin/x64/NvLowLatencyVk.dll)
+  get_filename_component(name "${f}" NAME)
+  if(EXISTS "${SDK_DIR}/${f}")
+    if(NOT EXISTS "${OUT}/${name}" OR "${SDK_DIR}/${f}" IS_NEWER_THAN "${OUT}/${name}")
+      file(COPY_FILE "${SDK_DIR}/${f}" "${OUT}/${name}")
+      message(STATUS "copied ${name}")
+    endif()
+  else()
+    message(STATUS "missing ${SDK_DIR}/${f} (that upscaler will be unavailable)")
+  endif()
+endforeach()
