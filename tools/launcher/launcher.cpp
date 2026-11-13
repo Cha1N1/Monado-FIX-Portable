@@ -1730,6 +1730,12 @@ int main(int argc, char **argv) {
         if (pending) { ImGui::SameLine(); ImGui::TextColored(monado_rgb(0xE4C477),"%s",g.ui_lang ? "Unsaved" : "Sin guardar"); }
         ImGui::End();
         ImGui::Render();
+        // [XCDE] HiDPI: ImGui's vertices are in window coordinates, the renderer draws in pixels. The SDL renderer backend
+        // scales only the clip rectangles, so on a scaled display (Wayland / macOS: pixel density 1.5 or 2) the UI was
+        // drawn into a corner at 1/density and clipped. Scale the renderer to the framebuffer every frame (resizes and
+        // monitor changes included).
+        const ImVec2 fb_scale = ImGui::GetDrawData()->FramebufferScale;
+        SDL_SetRenderScale(ren, fb_scale.x, fb_scale.y);
         SDL_SetRenderDrawColor(ren, 9, 13, 18, 255);
         SDL_RenderClear(ren);
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), ren);
