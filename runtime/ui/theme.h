@@ -36,7 +36,7 @@ static inline void monado_theme(float scale) {
     s.ScaleAllSizes(scale>0 ? scale : 1);
 }
 // [XCDE] Launcher theme: deep navy panels, one crimson accent (selected page, PLAY) and teal for checkmarks,
-// sliders and small labels. The F1 menu keeps monado_theme().
+// sliders and small labels. The launcher and the in-game F1 menu / FPS counter use it.
 static inline ImVec4 monado_teal() { return monado_rgb(0x5FD4DE); }
 static inline ImVec4 monado_crimson() { return monado_rgb(0xBA213B); }
 static inline void monado_launcher_theme(float scale) {

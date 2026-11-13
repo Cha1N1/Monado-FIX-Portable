@@ -492,7 +492,10 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
             }
             if (!font) io.Fonts->AddFontDefault();
         }
-        monado_theme(font_h / 16.0f);
+        // [XCDE] the launcher's look (navy panels, crimson selection, teal accents), as a floating window over the game
+        monado_launcher_theme(font_h / 16.0f);
+        ImGui::GetStyle().WindowRounding = 12.0f * font_h / 16.0f;
+        ImGui::GetStyle().WindowBorderSize = 1.0f;
         if (!vk_imgui_backend_init()) { ImGui::DestroyContext(ctx); ctx = nullptr; open_ = false; return; }
         ImGui_ImplVulkan_CreateFontsTexture();
     }
