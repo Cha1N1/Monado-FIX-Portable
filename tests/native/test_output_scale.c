@@ -27,5 +27,18 @@ int main(void) {
     g_settings.res_mode=RES_1_5;
     output_scale(1280,720,false,33,5,&o); assert(fabs(o.sy*720-1080)<.001);
     output_scale(3840,2160,false,34,5,&o); assert(fabs(o.sy*720-1080)<.001);
-    puts("output scale: absolute limits, CPU bottleneck, profile switching and 1.5x passed"); return 0;
+    // Balanced (1.7x) snaps the render size to an 8-pixel grid for every temporal upscaler; Quality stays exact.
+    g_settings.res_mode=RES_MATCH; g_settings.upscale_quality=UQ_BALANCED;
+    const int ups[]={UPSCALE_FSR3,UPSCALE_DLSS,UPSCALE_FSR4_LITE};
+    for (int u=0;u<3;u++) {
+        g_settings.upscaler=ups[u];
+        output_scale(3840,2160,false,35,5,&o);
+        assert(lround(o.sx*1280)==2256 && lround(o.sy*720)==1272);  // (exact 1.7x: 2259 x 1271)
+        output_scale(1920,1080,false,36,5,&o);
+        assert(lround(o.sx*1280)%8==0 && lround(o.sy*720)%8==0);
+        assert(fabs(o.vw-1920)<.001 && fabs(o.vh-1080)<.001);  // the output box is unchanged
+    }
+    g_settings.upscale_quality=UQ_QUALITY; g_settings.upscaler=UPSCALE_FSR3;
+    output_scale(3840,2160,false,37,5,&o); assert(fabs(o.sx*1280-2560)<.001 && fabs(o.sy*720-1440)<.001);
+    puts("output scale: absolute limits, CPU bottleneck, profile switching, 1.5x and the Balanced grid passed"); return 0;
 }
