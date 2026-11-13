@@ -1,6 +1,7 @@
 # One-time setup of a Windows machine for building Monado (modelled on LASRecomp's tools/setup_windows.ps1).
 # Installs MSYS2 (UCRT64: SDL3, FFmpeg, Vulkan loader / headers, shaderc, Vulkan Memory Allocator, Opus) and
-# Python 3.12, then creates .venv (the recompiler: capstone, unicorn, lz4; the C compiler: ziglang). Safe to re-run.
+# Python 3.12, then creates .venv (the recompiler: capstone, unicorn, lz4; the C compiler: ziglang; the CMake build:
+# cmake, ninja). Safe to re-run.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
@@ -27,6 +28,6 @@ if (-not (Test-Path $py)) {
 }
 if (-not (Test-Path "$root\.venv\Scripts\python.exe")) { & $py -m venv "$root\.venv" }
 Write-Host 'Installing the recompiler packages (pip)...'
-& "$root\.venv\Scripts\python.exe" -m pip install -q --disable-pip-version-check lz4 capstone unicorn ziglang
+& "$root\.venv\Scripts\python.exe" -m pip install -q --disable-pip-version-check lz4 capstone unicorn ziglang==0.17.1 cmake ninja
 
 Write-Host 'Done. Next: "Build Monado.bat" (or, in Git Bash: scripts/build_all.sh once targets\ holds your game files).'

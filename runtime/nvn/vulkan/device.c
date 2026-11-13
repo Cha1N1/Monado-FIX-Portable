@@ -278,6 +278,15 @@ static void create_device(void) {
     g_vk.host_import = has_ext(ep, ne, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME) &&
                        g_settings.gpu_profile != GPU_PROFILE_COMPATIBILITY;  // optional zero-copy guest heap path
     if (g_vk.host_import) ext[n_ext++] = VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME;
+#ifdef __linux__
+    // [XCDE] T-LINUX-GTT: import the driver-owned guest heap (exec.c gmem_import_dma) instead of a userptr host import
+    g_vk.dmabuf_import = has_ext(ep, ne, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME) &&
+                         has_ext(ep, ne, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
+    if (g_vk.dmabuf_import) {
+        ext[n_ext++] = VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME;
+        ext[n_ext++] = VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME;
+    }
+#endif
     bool fault = has_ext(ep, ne, VK_EXT_DEVICE_FAULT_EXTENSION_NAME);  // device-lost diagnostics (vk_device_fault_report)
     if (fault) ext[n_ext++] = VK_EXT_DEVICE_FAULT_EXTENSION_NAME;
     // [XCDE] the driver's real per-heap usage and budget for VMA (the [mem] report; a 512 MB iGPU carve-out shows how
@@ -318,6 +327,27 @@ static void create_device(void) {
     if (legacy) gpl = false; // conservative 1.2 path: no optional 1.3 feature chains
     if (gpl) { ext[n_ext++] = VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME; ext[n_ext++] = VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME; }
     g_vk.gpl = gpl;
+#ifdef __linux__
+    // [XCDE] T-FSR4-LITE: the native Lite INT8 shaders' requirements, enabled only when all are present (Vulkan 1.3 path);
+    // the other upscalers do not need them.
+    bool fsr4_ext = !legacy && has_ext(ep, ne, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) &&
+        has_ext(ep, ne, VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME) &&
+        has_ext(ep, ne, VK_VALVE_SHADER_MIXED_FLOAT_DOT_PRODUCT_EXTENSION_NAME);
+    VkPhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE fsr4_mixed = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MIXED_FLOAT_DOT_PRODUCT_FEATURES_VALVE};
+    VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR fsr4_deriv = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR, .pNext = &fsr4_mixed};
+    if (fsr4_ext) {
+        VkPhysicalDeviceFeatures2 q = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &fsr4_deriv};
+        vkGetPhysicalDeviceFeatures2(g_vk.phys, &q);
+        fsr4_ext = fsr4_deriv.computeDerivativeGroupQuads && fsr4_mixed.shaderMixedFloatDotProductFloat16AccFloat32;
+    }
+    if (fsr4_ext) {
+        ext[n_ext++] = VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME;
+        ext[n_ext++] = VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME;
+        ext[n_ext++] = VK_VALVE_SHADER_MIXED_FLOAT_DOT_PRODUCT_EXTENSION_NAME;
+    }
+#endif
     free(ep);
 
     // features the backend relies on (all present on current desktop drivers)
@@ -372,12 +402,24 @@ static void create_device(void) {
         vkGetPhysicalDeviceFeatures2(g_vk.phys, &afl_q);
         g_vk.feedback_loop = afl_have.attachmentFeedbackLoopLayout == VK_TRUE;
     }
-    LOG("[vk] attachment feedback loop layout: %s\n", g_vk.feedback_loop ? "on" : "not available");
+    LOG("[vk] attachment feedback loop layout: %s\n", g_vk.feedback_loop ? "on (native colour feedback)" : "not available (snapshot copies)");
+    // [XCDE] #7: with dynamicRenderingLocalRead a by-region barrier inside rendering makes the previous draw's colour
+    // writes visible to this draw's feedback reads without ending the pass; without it the pass is restarted instead.
+    VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR local_read = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR};
+    if (g_vk.feedback_loop && has_ext(ep, ne, VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME)) {
+        VkPhysicalDeviceFeatures2 lr_q = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &local_read};
+        vkGetPhysicalDeviceFeatures2(g_vk.phys, &lr_q);
+        g_vk.feedback_local_read = local_read.dynamicRenderingLocalRead == VK_TRUE;
+        if (g_vk.feedback_local_read) ext[n_ext++] = VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME;
+    }
+    local_read.pNext = NULL;
     // [XCDE] v12: attachment feedback loop layout enable (chained only when the device has the extension + feature:
     // chaining a feature struct without support fails vkCreateDevice and the game would not boot)
     VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT afl = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_FEATURES_EXT,
-        .attachmentFeedbackLoopLayout = g_vk.feedback_loop ? VK_TRUE : VK_FALSE};
+        .attachmentFeedbackLoopLayout = g_vk.feedback_loop ? VK_TRUE : VK_FALSE,
+        .pNext = g_vk.feedback_local_read ? (void *)&local_read : NULL};
     VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT div = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT,
         .vertexAttributeInstanceRateDivisor = g_vk.divisor ? VK_TRUE : VK_FALSE,
@@ -447,6 +489,18 @@ static void create_device(void) {
     b->geometryShader = h->geometryShader;  // [XCDE] the game's point-sprite geometry shaders
     b->logicOp = h->logicOp;  // [XCDE] T176: ColorState logic ops (the probe-lighting index map ORs its slots)
     g_vk.logic_op = h->logicOp;
+#ifdef __linux__
+    b->shaderStorageImageExtendedFormats = h->shaderStorageImageExtendedFormats;  // [XCDE] native FSR 3 FP images
+    b->shaderInt16 = h->shaderInt16;  // [XCDE] T-FSR4-LITE
+    if (!legacy) f13.shaderIntegerDotProduct = h13.shaderIntegerDotProduct;
+    {
+        extern bool fsr4_device_ok;
+        fsr4_device_ok = fsr4_ext && b->shaderInt16 && f12.shaderInt8 && f12.shaderFloat16 &&
+            f11.storageBuffer16BitAccess && f12.storageBuffer8BitAccess && f13.shaderIntegerDotProduct;
+        if (fsr4_ext) { fsr4_mixed.pNext = f.pNext; f.pNext = &fsr4_deriv; }
+        LOG("[fsr4] Lite INT8 device features: %s\n", fsr4_device_ok ? "supported" : "unavailable");
+    }
+#endif
     if (!h->shaderInt64) LOG("[vk] warning: no shaderInt64 (64-bit address math in shaders)\n");
     // [XCDE] DLSS (dlss.cpp): Streamline's device extensions, features and queues (after ours, same family)
     uint32_t extra_g = 0, extra_c = 0;

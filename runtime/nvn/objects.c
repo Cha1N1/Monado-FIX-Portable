@@ -185,6 +185,9 @@ NVN(nvnSyncWait) {  // NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED
             if (e) lag = atoi(e) != 0 && backend_async();
             else if (vc >= 0) lag = vc == 1 && backend_async() && high;
             if (lag >= 0) LOG("[nvn] frame lag %s\n", lag ? "on (one frame in flight)" : "off");
+            // [XCDE] T-FRAME-LAG: tell the vertex cache to stage its refreshes through host memory (exec.c vc_flush):
+            // with the GPU a frame behind it must not read guest pages the game has already rewritten.
+            if (lag > 0) { extern void vk_set_frame_lag(bool on); vk_set_frame_lag(true); }
         }
         if (lag > 0 && c->x[30] == 0x70005bd038ull) {
             static uint64_t prev;

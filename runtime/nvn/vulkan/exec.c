@@ -17,11 +17,17 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifdef __linux__
+#include <unistd.h>  // [XCDE] T-LINUX-GTT: dup/close of the dma-buf fd
+#endif
 
 #include "../../kernel.h"
 #include "shaders.h"
 #include "vk.h"
 #include "vkq.h"  // [XCDE] T-LINUX-THREE: ordered recording worker
+#include "cliff_batch.h"  // [XCDE] T-CLIFF-BATCH
+#include "bloom_prefilter.h"  // [XCDE] T-BLOOM-PREFILTER
+#include "bloom.h"  // [XCDE] T-WATER-BLOOM
 #include "temporal.h"
 void vk_watch(VkImage dst, const char *site);  // [XCDE] debugging: log writes to a watched image
 static VkImage g_watch_img;
@@ -78,6 +84,8 @@ static _Atomic int stat_compiles;
 static _Atomic uint64_t hc_cached_ns, hc_link_ns, hc_whole_ns, hc_cached_n, hc_link_n, hc_whole_n;
 static uint64_t hc_wait_ns, hc_wait_n, hc_upload;
 static uint64_t op_counts[CMD_COUNT];
+static uint64_t cliff_batch_groups, cliff_batch_saved;  // [XCDE] T-CLIFF-BATCH (stats)
+static VkCliffBatch cliff_batch_pending;                // the current draw's group (draws > 1: instanced)
 bool g_debug_frame;
 static char stats_text[2048];
 static double vc_bytes_mb(void);  // [XCDE] T169 (memory report)
@@ -1270,6 +1278,11 @@ void vk_prof_frame(uint64_t frame, uint64_t present_ns) {
 }
 
 const char *renderer_stats(void) {
+    if (cliff_batch_groups) {  // [XCDE] T-CLIFF-BATCH
+        LOG("[cliff-batch] %llu logical draws in %llu instanced draws\n",
+            (unsigned long long)(cliff_batch_groups + cliff_batch_saved), (unsigned long long)cliff_batch_groups);
+        cliff_batch_groups = cliff_batch_saved = 0;
+    }
     static int dumps;
     if (dumps++ < 3) {
         LOG("[vk] command counts:");
@@ -1534,6 +1547,29 @@ static void nan_scan(TexBackend *b, VkFormat f, int slot) {
             100.0 * bad / ((double)w * h), (unsigned long long)(first % w), (unsigned long long)(first / w));
 }
 
+// [XCDE] #7: colour attachments that this pass's draws also sample are in ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT inside
+// rendering and GENERAL outside it, as VK_EXT_attachment_feedback_loop_layout requires. Sampling a GENERAL attachment
+// while writing it is undefined: on AMD it lets the sampler read compressed/unresolved colour (the 1-2 px coloured
+// dots on rocks and walls). The transitions also order earlier writes before the reads.
+static TexBackend *pass_feedback[8];
+static uint32_t pass_nfeedback;
+static uint32_t draw_feedback_mask;  // colour attachments sampled through the feedback layout by the current draw
+static void feedback_layout(bool enter) {
+    if (!pass_nfeedback) return;
+    VkImageMemoryBarrier2 b[8];
+    for (uint32_t i = 0; i < pass_nfeedback; i++) {
+        TexBackend *t = pass_feedback[i];
+        b[i] = (VkImageMemoryBarrier2){.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, .srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+            .oldLayout = enter ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT,
+            .newLayout = enter ? VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT : VK_IMAGE_LAYOUT_GENERAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = t->image, .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, t->levels, 0, VK_REMAINING_ARRAY_LAYERS}};
+    }
+    VkDependencyInfo d = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = pass_nfeedback, .pImageMemoryBarriers = b};
+    vkCmdPipelineBarrier2(vk_cmd(), &d);
+}
 static void vk_end_pass_at(int line);
 void vk_end_pass(void) { vk_end_pass_at(0); }
 #define vk_end_pass() vk_end_pass_at(__LINE__)
@@ -1545,6 +1581,8 @@ static void vk_end_pass_at(int line) {
     oq_end(vk_cmd());  // [XCDE] T139
     vkCmdEndRendering(vk_cmd());
     in_pass = false;
+    feedback_layout(false);  // [XCDE] #7
+    pass_nfeedback = 0;
     // [XCDE] T213: the first pass this frame that drew into the presented image (the scene composite: the HUD follows)
     // (only once this frame's scene was drawn: the game writes the window image earlier in the frame too - a snapshot
     // there turned the jitter off for the whole scene and DLSS / FSR got no sub-pixel detail: jagged edges)
@@ -1772,8 +1810,14 @@ static void begin_pass(void) {
         VkImageView v = vk_view(t, &st.rt.cview[i], st.rt.has_cview[i], true, TEXTYPE_2D);
         TexBackend *b = t->backend;
         if (!v) continue;
+        bool fb_layout = g_vk.feedback_loop && (draw_feedback_mask & (1u << i));  // [XCDE] #7
+        if (fb_layout) {
+            bool seen = false;
+            for (uint32_t k = 0; k < pass_nfeedback; k++) seen |= pass_feedback[k]->image == b->image;
+            if (!seen && pass_nfeedback < 8) pass_feedback[pass_nfeedback++] = b;
+        }
         ca[i].imageView = v;
-        ca[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        ca[i].imageLayout = fb_layout ? VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT : VK_IMAGE_LAYOUT_GENERAL;
         ca[i].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
         ca[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         bool fresh = (int)renderer_texture_level_fresh(t) | (int)renderer_texture_frame_fresh(t);  // both: each marks its state
@@ -1834,6 +1878,7 @@ static void begin_pass(void) {
     if (g_watch_img && has_d && st.rt.depth && ((TexBackend *)st.rt.depth->backend)->image == g_watch_img) vk_watch(g_watch_img, "begin_pass (depth attachment)");
     for (uint32_t i = 0; i < pass_ncolor; i++) if (g_watch_img && st.rt.color[i] && st.rt.color[i]->backend && ((TexBackend *)st.rt.color[i]->backend)->image == g_watch_img) vk_watch(g_watch_img, "begin_pass (COLOR attachment)");
     pass_mark_attachments();  // [XCDE] T162
+    feedback_layout(true);  // [XCDE] #7
     vkCmdBeginRendering(cb, &ri);
     ss_forget();  // (whatever ran between the passes may have set its own state)
     in_pass = true;
@@ -1984,6 +2029,7 @@ static VkPipeline clear_pipeline(int index, int kind, uint32_t mask, bool depth,
                                        .pRasterizationState = &rs, .pMultisampleState = &ms, .pDepthStencilState = &ds,
                                        .pColorBlendState = &cb, .pDynamicState = &dy, .layout = pc_layout()};
     VkPipeline p = VK_NULL_HANDLE;
+    if (g_vk.feedback_loop) pi.flags |= VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;  // [XCDE] #7
     if (vkCreateGraphicsPipelines(g_vk.dev, g_vk.pcache, 1, &pi, NULL, &p) != VK_SUCCESS) LOG("[vk] clear pipeline failed\n");
     clear_tab[slot].key = key;
     clear_tab[slot].pipe = p;
@@ -2040,6 +2086,22 @@ static void clear(int index, int kind, const void *color, uint32_t mask, bool de
 
 // ================================================================== programs
 #define MAX_BIND 96
+// [XCDE] T-CLIFF-BATCH: these content-identified cliff programs use instanced
+// vertex attributes, not InstanceIndex/PrimitiveID or shader memory side effects.
+static bool cliff_program_known(const NvnProgram *np) {
+    static const uint64_t pairs[][2] = {
+        {0xc34f15891aaac80cull, 0x11da4a2af3065fbdull},
+        {0x72ef96170d351f3aull, 0x3b4e3e20d272818aull},
+        {0xc18e109999489476ull, 0x908fc1e8bb471902ull},
+        {0x76c9aa8fe4d50168ull, 0x98e65f584ae0f904ull},
+        {0x6828f5292e751f3aull, 0x43f073dbf7f3930eull},
+        {0xe864e50bfe0a87a9ull, 0xf1958d10a7b81ce5ull},
+    };
+    if (np->stage_mask != 3) return false;
+    for (unsigned i = 0; i < sizeof pairs / sizeof pairs[0]; i++)
+        if (np->stages[0].code_hash == pairs[i][0] && np->stages[1].code_hash == pairs[i][1]) return true;
+    return false;
+}
 typedef struct {
     ShaderInfo *vi, *fi;
     uint64_t code[2], cmax[2];  // translation inputs (copied: translated on the translator thread)
@@ -2061,6 +2123,7 @@ typedef struct {
     // compile ended (ns), the SPIR-V the disk cache didn't have, whether prewarm asked for it
     uint64_t t_new, t_x0, t_xl, t_x1, t_c1;
     uint8_t spv_new, prewarmed;
+    bool cliff_candidate;  // [XCDE] T-CLIFF-BATCH: one of the content-identified cliff programs
 } Prog;
 
 static VkPipelineLayout make_layout(Prog *p, int nsets, VkShaderStageFlags s0, VkShaderStageFlags s1) {
@@ -2084,10 +2147,40 @@ static void save_glsl(const char *src, uint64_t addr, const char *suffix) {
     if (f) { fputs(src, f); fclose(f); }
 }
 
+// [XCDE] T-BLOOM-PREFILTER (bloom_prefilter.h): matched by the guest program's code (the draw-time fragment
+// hash), so every translated variant of it is replaced; the replacement source has its own SPIR-V cache identity.
+static const char *bloom_prefilter_src(uint64_t code) {
+    static int mode = -1;
+    if (mode < 0) { const char *e = getenv("XCDE_BLOOM_PREFILTER"); mode = e ? atoi(e) : 2; }
+    if (!mode || !code) return NULL;
+    if (hmix(1469598103934665603ull, (const void *)(uintptr_t)(code + 0x30), 0x200) != 0x2aa23b65117ab1a5ull) return NULL;
+    static int reported;
+    if (!__atomic_exchange_n(&reported, 1, __ATOMIC_RELAXED))
+        LOG("[bloom] full-footprint prefilter enabled%s\n", mode == 1 ? " (no firefly weighting)" : " (firefly weighting)");
+    return mode == 1 ? monado_bloom_prefilter_box_glsl : monado_bloom_prefilter_karis_glsl;
+}
+
+// [XCDE] T-WATER-BLOOM (bloom.h): the bloom chain's reconstruction (guest fragment program 0887965a4681061d) sums four
+// bilinear taps at the corners uv +- cb3[1].zw. Around a small, very bright source those four separated lobes show as
+// square / four-lobed halos (water highlights). The replacement keeps the authored radius, normalization and tint but
+// fills the footprint with a normalized 3x3 tent. Matched by the guest code like the prefilter above, so every
+// translated variant is replaced and the replacement has its own SPIR-V cache identity. XCDE_BLOOM_FILTER=0: original.
+static const char *bloom_tent_src(uint64_t code) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("XCDE_BLOOM_FILTER"); on = !e || atoi(e) != 0; }
+    if (!on || !code) return NULL;
+    if (hmix(1469598103934665603ull, (const void *)(uintptr_t)(code + 0x30), 0x200) != 0x0887965a4681061dull) return NULL;
+    static int reported;
+    if (!__atomic_exchange_n(&reported, 1, __ATOMIC_RELAXED)) LOG("[bloom] normalized tent reconstruction enabled\n");
+    return monado_bloom_tent_glsl;
+}
+
 static void compile_program(void *arg) {
     Prog *p = arg;
     size_t nv = 0, nf = 0;
     const char *fs_src = p->fi->msl;
+    { const char *b = bloom_prefilter_src(p->src[1]); if (b) fs_src = b; }
+    { const char *b = bloom_tent_src(p->src[1]); if (b) fs_src = b; }
     char *fs_over = NULL;
     if (getenv("XCDE_GLSL_DIR")) {  // [XCDE] debugging: a hand-edited fragment shader (<dir>/<code addr>_fs.glsl) replaces the translated one
         char path[512];
@@ -2348,6 +2441,7 @@ static Prog *get_program_(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
     slot->key = h;
     slot->val = p;
     prog_tab.n++;
+    p->cliff_candidate = cliff_program_known(np);
     for (int i = 0; i < 2; i++) {
         p->code[i] = np->stages[i].code_addr;
         p->src[i] = nvn_stage_code(&np->stages[i]);
@@ -2752,6 +2846,10 @@ static VkResult gpl_make(const VkGraphicsPipelineCreateInfo *base, VkGraphicsPip
                                                  .pNext = base->pNext, .flags = what};
     VkGraphicsPipelineCreateInfo pi = *base;
     pi.pNext = &gl;
+    // [XCDE] #7: the fragment and output libraries must agree with the pass's feedback layout.
+    if (g_vk.feedback_loop && (what & (VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT |
+                                       VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT)))
+        pi.flags |= VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
     // [XCDE] T212: no RETAIN_LINK_TIME_OPTIMIZATION_INFO: nothing links these with link-time optimization (the optimized
     // pipeline that replaces a linked one is compiled whole, gpl_optimize), and the retained info made each library
     // ~180 KB (one area's ~3,500 libraries: +630 MB of process memory, never freed). XCDE_GPL_RETAIN=1: keep it.
@@ -2965,6 +3063,7 @@ static VkResult gpl_link(const PipeKey *k, VkPipeline *out, void *ents[4]) {
     if (libs[0] && libs[1] && libs[2] && libs[3]) {
         VkPipelineLibraryCreateInfoKHR li = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LIBRARY_CREATE_INFO_KHR, .libraryCount = 4, .pLibraries = libs};
         VkGraphicsPipelineCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &li, .layout = k->prog->layout};
+        if (g_vk.feedback_loop) pi.flags |= VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;  // [XCDE] #7
         r = vkCreateGraphicsPipelines(g_vk.dev, g_vk.pcache, 1, &pi, NULL, out);
         if (r == VK_SUCCESS)  // (counted before the shared lock goes: eviction only takes unreferenced libraries)
             for (int i = 0; i < 4; i++) { atomic_fetch_add(&e[i]->refs, 1); ents[i] = e[i]; }
@@ -3334,6 +3433,7 @@ static VkResult pipeline_whole(const PipeKey *k, VkPipelineCreateFlags flags, Vk
     // [VEGA-FIX] amdvlk64.dll (Vega iGPU, Windows) died here with an integer divide by zero (c0000094) in its shader
     // compiler and the whole game closed. The call is guarded: that pipeline just fails (its draws are skipped like
     // any program that failed to build) and its key is logged, to find out which state the driver chokes on.
+    if (g_vk.feedback_loop) pi.flags |= VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;  // [XCDE] #7
     PwCall pc = {&pi, out, VK_ERROR_INITIALIZATION_FAILED};
     if (!plat_try_call(pw_call, &pc)) {
         static int nc;
@@ -3646,6 +3746,7 @@ void vk_prewarm_hold(uint64_t frame_draws) {
 // (the calling thread translates and compiles). Returns 0 if not built; *vs_attr = the vertex inputs it reads.
 int vk_precompile_program(const NvnProgram *np, const ShaderKey *vkey, const ShaderKey *fkey, uint32_t *vs_attr) {
     Prog *p = calloc(1, sizeof *p);
+    p->cliff_candidate = cliff_program_known(np);
     for (int i = 0; i < 2; i++) {
         p->code[i] = np->stages[i].code_addr;
         p->src[i] = nvn_stage_code(&np->stages[i]);
@@ -3691,6 +3792,7 @@ int vk_precompile_variant(const NvnProgram *np, const void *rec, size_t rec_size
     memcpy(&v, rec, sizeof v);
     if (v.has_gs) return 0;
     Prog *p = calloc(1, sizeof *p);
+    p->cliff_candidate = cliff_program_known(np);
     for (int i = 0; i < 2; i++) {
         p->code[i] = np->stages[i].code_addr;
         p->src[i] = nvn_stage_code(&np->stages[i]);
@@ -3740,19 +3842,31 @@ int vk_precompile_variant(const NvnProgram *np, const void *rec, size_t rec_size
 }
 
 // ================================================================== feedback snapshots (renderer.m resolve_feedback)
-static NvnTexture *feedback_tex[4];
-static VkImageView feedback_view[4];
+static NvnTexture *feedback_tex[9];  // [XCDE] #7: up to eight colour targets plus depth
+static VkImageView feedback_view[9];
 static int nfeedback;
 static uint64_t g_cur_fs_hash;
 static NvnTexture *snap_tex[8];
 static bool snap_ok[8];
 static const char *snap_why[8];
 static const char *snap_reason = "?";
+// [XCDE] #7: a guest texture-visibility boundary (nvnCommandBufferBarrier, a storage-image write, a host upload into a
+// GPU-owned image) ends every cached same-frame feedback read. Between two boundaries the game has no guarantee that a
+// draw sees its own earlier colour writes through the texture unit, so one copy per material serves until the next one.
+static uint64_t feedback_visibility = 1;
+void vk_feedback_write_boundary(void) { feedback_visibility++; }
 static void snapshots_invalidate(NvnTexture *t) {
+    if (!t) vk_feedback_write_boundary();
     for (int i = 0; i < 8; i++) if ((!t || snap_tex[i] == t) && snap_ok[i]) { snap_ok[i] = false; snap_why[i] = snap_reason; }
 }
 
-typedef struct { NvnTexture *key; TexBackend copy; } Snap;
+typedef struct {
+    NvnTexture *key; TexBackend copy;
+    uint64_t visibility, frame;  // [XCDE] #7: stamps of the copy's contents (feedback_visibility, present count)
+    VkImage source_image;        // the attachment image it was copied from (a resize/reallocation is a new image)
+    uint32_t view_gen;
+    VkImageView view;            // identity 2D view of copy, valid while view_gen == vk_view_gen
+} Snap;
 static Snap snaps[16];
 static int nsnaps;
 
@@ -3796,6 +3910,7 @@ static TexBackend *snapshot_image(NvnTexture *t, TexBackend *src) {
         d->mem = VK_NULL_HANDLE;
     }
     if (!d->image) {
+        s->view = VK_NULL_HANDLE;
         VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = src->format,
                                 .extent = {src->width, src->height, 1}, .mipLevels = 1, .arrayLayers = 1,
                                 .samples = (VkSampleCountFlagBits)src->samples, .tiling = VK_IMAGE_TILING_OPTIMAL,
@@ -3807,6 +3922,18 @@ static TexBackend *snapshot_image(NvnTexture *t, TexBackend *src) {
         vk_image_init_layout(vk_cmd(), d->image, d->aspect);
     }
     return d;
+}
+
+// [XCDE] #7: copies always use one identity 2D view; keep it with the copy instead of a view-cache lookup per draw.
+static VkImageView snapshot_view(Snap *s) {
+    extern uint32_t vk_view_gen;
+    if (!s->view || s->view_gen != vk_view_gen) {
+        static const VkComponentMapping id = {0};
+        VkImageAspectFlags a = s->copy.aspect & VK_IMAGE_ASPECT_DEPTH_BIT ? VK_IMAGE_ASPECT_DEPTH_BIT : s->copy.aspect;
+        s->view = vk_image_view(&s->copy, VK_IMAGE_VIEW_TYPE_2D, s->copy.format, 0, 1, 0, 1, id, a);
+        s->view_gen = vk_view_gen;
+    }
+    return s->view;
 }
 
 // (debug frames) a depth image's depth values as a greyscale PGM, stretched over its own min..max
@@ -4132,7 +4259,42 @@ static bool feedback_overlaps(int stage, ShaderTexture *st_, NvnTexture *t) {
     return sl0 < al1 && al0 < sl1 && sy0 < ay1 && ay0 < sy1;
 }
 
+// [XCDE] #7: the cached copy has an identity, single-level 2D view; reinterpreting views keep the native path.
+static bool feedback_identity_view(int stage, const ShaderTexture *tex, const NvnTexture *t) {
+    int slot = ((int)tex->handle_offset - 0x20) / 8;
+    if (slot < 0 || slot >= 32 || !st.tpool) return false;
+    uint64_t h = st.tex[stage][slot];
+    uint32_t tic = h & 0xFFFFF;
+    if (!h || tic >= (uint32_t)st.tpool->count) return false;
+    const NvnTexEntry *e = &((NvnTexEntry *)st.tpool->entries)[tic];
+    const NvnTextureView *v = e->has_view ? &e->view : NULL;
+    if (v && (((v->setmask & 4) && v->format != t->format) ||
+              ((v->setmask & 1) && v->base_level) || ((v->setmask & 2) && v->min_layer))) return false;
+    const uint8_t *sw = v && (v->setmask & 8) ? v->swizzle : t->swizzle;
+    for (int i = 0; i < 4; i++) if (sw[i] <= 5 && sw[i] != 2 + i) return false;
+    return true;
+}
+
+// [XCDE] #7 (GitHub issue #7, the 1-2 px coloured dots on rocks and walls). A draw that samples one of its own
+// attachments used to read it in GENERAL layout while writing it. That is undefined in Vulkan; AMD drivers keep colour
+// compression on such images and the sampler can read unresolved data. Now:
+//  - colour attachments a draw samples but does not write: native VK_EXT_attachment_feedback_loop_layout (layout,
+//    usage bit, pipeline flag), plus a by-region dependency (dynamic rendering local read) or a pass restart so earlier
+//    writes are visible;
+//  - colour attachments the draw's fragment shader also writes: a copy, reused by every later draw of the same frame
+//    until the next guest visibility boundary (feedback_visibility: barrier, storage-image write, host upload). The
+//    previous "one copy per texture and frame" reuse ignored writes in between and could bind stale pixels;
+//  - depth, vertex-stage reads, storage-bound images and devices without the extension: copies, as before.
+// XCDE_FEEDBACK_CACHE=0: no cached copies (native reads only). LARECOMP_FEEDBACK_DIRECT=0 or amd_fix = on: copies only.
 static void resolve_feedback(Prog *pr) {
+    bool native_color = false;  // one dependency for all native feedback slots of this draw
+    uint32_t mask = 0;
+    uint64_t frame = renderer_present_count();
+    static int cache_self = -1;
+    if (cache_self < 0) {
+        const char *e = getenv("XCDE_FEEDBACK_CACHE"); cache_self = !e || atoi(e) != 0;
+        LOG("[vk] colour self-feedback: %s\n", cache_self ? "visibility-scoped copies" : "native feedback reference");
+    }
     nfeedback = 0;
     static int off = -1;
     if (off < 0) off = getenv("LARECOMP_NO_FEEDBACK") != NULL;
@@ -4141,70 +4303,64 @@ static void resolve_feedback(Prog *pr) {
     // [XCDE] v12 (plan B, #7, doc section 4.4): this call's copies are executed together at the end: one
     // vk_end_pass() + one vk_full_barrier() for all of them instead of one per copy. The pass stays open while the
     // pending list fills (nothing in the loop records render commands), so the recorded command order does not change.
-    struct FbPend { NvnTexture *t; TexBackend *src, *dst; VkImageAspectFlags sa; int si, idx; };
-    struct FbPend pend[4];  // (nfeedback caps at 4 per call, so there can be at most 4 copies)
+    struct FbPend { NvnTexture *t; TexBackend *src, *dst; Snap *snap; VkImageAspectFlags sa; int si, idx; };
+    struct FbPend pend[9];  // (nfeedback caps at 9 per call)
     int np = 0;
+    uint32_t storage_mask = 0;  // colour attachments also bound as storage images: those need GENERAL
     for (int sg = 0; sg < 2; sg++)
         for (int i = 0; i < infos[sg]->ntex; i++) {
+            if (!infos[sg]->tex[i].is_image) continue;
+            NvnTexture *t = shader_texture_object(sg, &infos[sg]->tex[i]);
+            for (int k = 0; k < st.rt.ncolor; k++) if (t && t == st.rt.color[k]) storage_mask |= 1u << k;
+        }
+    for (int sg = 0; sg < 2; sg++)
+        for (int i = 0; i < infos[sg]->ntex; i++) {
+            if (infos[sg]->tex[i].is_image) continue;  // (storage access is tracked separately; it is not sampled feedback)
             NvnTexture *t = shader_texture_object(sg, &infos[sg]->tex[i]);
             if (!is_attachment(t) || !feedback_overlaps(sg, &infos[sg]->tex[i], t)) continue;
-            // [XCDE] T161: colour feedback samples the attachment itself (all images are in GENERAL layout), as the
-            // Maxwell texture unit reads render-target memory. The snapshot path (end the pass, full barrier, copy the
-            // whole image) ran ~1,700 times a frame in battle - the game's UI uber-shaders (13 texture slots) have the
-            // scene target bound in slots they read through uniform-selected branches. Measured: 5.57 M copies -> 0 on
-            // the prologue route, captures identical (max 2/255 on 0.2 % of one frame), battle 23.8 -> 27.7 fps
-            // (deterministic), validation layers quiet. LARECOMP_FEEDBACK_DIRECT=0: snapshots again. Depth: unchanged.
-            static int direct = -1;
-            // T252 made snapshots the default on every vendor. [PERF-V5] the direct path (V4 behaviour, +16 % in battle) is the
-            // default again on ALL vendors. LARECOMP_FEEDBACK_DIRECT=0 brings the snapshots back (if blue textures / flicker appear).
-            // [XCDE] issue #7: 1 = amd_fix auto turns the snapshots on for AMD RDNA 3 (the one lever the tester
-            // confirmed: LARECOMP_FEEDBACK_DIRECT=0 fixes the 1-2 px colour dots). 0 = auto leaves everything as
-            // it was; the launcher/menu toggle still works. GPL-off is NOT touched here (device lost, Test 1).
-            #define AMD_FIX_AUTO_RDNA3 1
+            static int direct = -1;  // 1: native feedback layout allowed for colour; 0: copies only
             if (direct < 0) {
                 const char *e = getenv("LARECOMP_FEEDBACK_DIRECT");
                 if (e) direct = atoi(e) != 0;                            // diagnostics: env wins
-                else if (g_settings.amd_fix == AMD_FIX_ON) direct = 0;   // amd_fix = on
-                else if (g_settings.amd_fix == AMD_FIX_OFF) direct = 1;  // amd_fix = off
-                else {                                                   // automatic
-                    direct = !(vk_amd_rdna3() && AMD_FIX_AUTO_RDNA3);
-                    if (!direct) LOG("[vk] AMD RDNA 3: feedback snapshots (amd_fix=auto, GitHub #7)\n");
-                }
+                else direct = g_settings.amd_fix != AMD_FIX_ON;          // amd_fix = on: copies on every draw that reads back
+                LOG("[vk] colour attachment feedback: %s\n", !direct ? "copies (amd_fix = on / LARECOMP_FEEDBACK_DIRECT=0)" :
+                    g_vk.feedback_loop ? "native feedback layout" : "copies (no VK_EXT_attachment_feedback_loop_layout)");
             }
-            // [XCDE] v12 (amd_fix cost, #7): with VK_EXT_attachment_feedback_loop_layout (device.c + textures.c) a draw can
-            // sample the attachment it is writing, so nothing has to be copied: RDNA 3 no longer needs the snapshot copies
-            // and the direct path costs what it did before the amd_fix. The snapshot stays as plan B for drivers without
-            // the extension (or LARECOMP_NO_FEEDBACK_LOOP=1 to force it).
-            if (!direct && g_vk.feedback_loop && !getenv("LARECOMP_NO_FEEDBACK_LOOP")) {
-                static int logged;
-                if (!logged++) LOG("[vk] attachment feedback loop: staying on the direct path, no snapshot copies (GitHub #7 amd_fix)\n");
-                direct = 1;
+            bool storage_bound = false;
+            for (int k = 0; k < st.rt.ncolor; k++)
+                if (st.rt.color[k] == t && (storage_mask & (1u << k))) storage_bound = true;
+            bool cached_color = false;  // a self-writing material: one stable copy until the next visibility boundary
+            if (cache_self && sg == 1 && !storage_bound && t != st.rt.depth &&
+                infos[sg]->tex[i].type == TEXTYPE_2D && t->levels <= 1 && t->depth <= 1 &&
+                feedback_identity_view(sg, &infos[sg]->tex[i], t))
+                for (int k = 0; k < st.rt.ncolor; k++)
+                    if (st.rt.color[k] == t && ((pr->fi->out_mask & st.channel_mask) >> (k * 4) & 0xF)) cached_color = true;
+            if (!cached_color && direct && g_vk.feedback_loop && sg == 1 && t != st.rt.depth && !storage_bound) {
+                for (int k = 0; k < st.rt.ncolor; k++) if (st.rt.color[k] == t) mask |= 1u << k;
+                native_color = true;
+                continue;
             }
-            if (direct && t != st.rt.depth) continue;
             bool have = false;
             for (int k = 0; k < nfeedback; k++) have |= feedback_tex[k] == t;
-            if (have || nfeedback == 4) continue;
+            if (have || nfeedback == 9) continue;
             static int nosnap = -1;
             if (nosnap < 0) nosnap = getenv("LARECOMP_NO_SNAPSHOT_REUSE") != NULL;
+            Snap *existing = NULL;
+            for (int k = 0; k < nsnaps; k++) if (snaps[k].key == t && snaps[k].copy.image) existing = &snaps[k];
+            // Resolve queued CPU pixels and any resize BEFORE checking the stamps: upload_pending advances
+            // feedback_visibility, so a cached read cannot hide a movie frame or other host update of this frame.
+            TexBackend *src = vk_tex(t, true);
+            if (!src) continue;
             int si = -1;
             for (int k = 0; k < 8; k++) if (snap_tex[k] == t) si = k;
             bool self_write = t == st.rt.depth && st.ds[0] && st.ds[1];
-            TexBackend *src = vk_tex(t, true);
-            Snap *existing = NULL;
-            for (int k = 0; k < nsnaps; k++) if (snaps[k].key == t && snaps[k].copy.image) existing = &snaps[k];
             VkImageAspectFlags sa = src->aspect & VK_IMAGE_ASPECT_DEPTH_BIT ? VK_IMAGE_ASPECT_DEPTH_BIT : src->aspect;
-            static const VkComponentMapping id = {0};
-            // [XCDE] v12 (plan B, #7): one copy per texture and frame at most. The #7 dots are subpixel: the copy made
-            // earlier this frame still serves even though snapshots_invalidate clears snap_ok on every write of the
-            // attachment (that is what made this path run ~1,700 times a frame in battle).
-            static struct { NvnTexture *t; uint64_t frame; } once[16];
-            static int nonce;
-            uint64_t fr = renderer_present_count();
-            bool once_copy = false;
-            for (int k = 0; k < 16; k++) once_copy |= once[k].t == t && once[k].frame == fr;
-            if (!nosnap && si >= 0 && ((snap_ok[si] || self_write) || once_copy) && existing) {
+            bool epoch_hit = cached_color && existing && existing->visibility == feedback_visibility &&
+                existing->frame == frame && existing->source_image == src->image &&
+                existing->copy.width == src->width && existing->copy.height == src->height && existing->copy.format == src->format;
+            if (!nosnap && existing && (epoch_hit || (!cached_color && si >= 0 && (snap_ok[si] || self_write)))) {
                 feedback_tex[nfeedback] = t;
-                feedback_view[nfeedback++] = vk_image_view(&existing->copy, VK_IMAGE_VIEW_TYPE_2D, src->format, 0, 1, 0, 1, id, sa);
+                feedback_view[nfeedback++] = snapshot_view(existing);
                 continue;
             }
             stat_feedback_copies++;
@@ -4224,11 +4380,15 @@ static void resolve_feedback(Prog *pr) {
                 }
             }
             if (ct_on()) LOG("[ct] snapshot %p %ux%u (was %s, si %d)\n", (void *)t, src->width, src->height, si >= 0 ? snap_why[si] : "new", si);
-            { int oslot = nonce++ & 15; once[oslot].t = t; once[oslot].frame = fr; }  // [XCDE] v12 (plan B): copied this frame
             TexBackend *dst = snapshot_image(t, src);  // (image creation only: the copy itself is deferred, see the flush)
+            Snap *snap = NULL;
+            for (int k = 0; k < nsnaps; k++) if (&snaps[k].copy == dst) snap = &snaps[k];
+            // Stamps belong to the copy image: reallocation and non-draw writes can never reuse stale contents.
+            if (snap) { snap->visibility = feedback_visibility; snap->frame = frame; snap->source_image = src->image; }
             if (si < 0) { static int rr; si = rr++ & 7; snap_tex[si] = t; }
-            pend[np++] = (struct FbPend){t, src, dst, sa, si, nfeedback};
-            nfeedback++;  // (slot reserved here, filled by the flush below)
+            pend[np++] = (struct FbPend){t, src, dst, snap, sa, si, nfeedback};
+            feedback_tex[nfeedback] = t;  // (reserved: a second slot sampling t in this call must not queue another copy)
+            feedback_view[nfeedback++] = VK_NULL_HANDLE;  // (filled by the flush below)
         }
     // [XCDE] v12 (plan B, #7): flush of the pending copies: one end of pass and one full barrier, then every copy.
     if (np) {
@@ -4252,10 +4412,30 @@ static void resolve_feedback(Prog *pr) {
                 cb = vk_cmd();
             }
             feedback_tex[e->idx] = e->t;
-            feedback_view[e->idx] = vk_image_view(e->dst, VK_IMAGE_VIEW_TYPE_2D, e->src->format, 0, 1, 0, 1, id, e->sa);
+            feedback_view[e->idx] = e->snap ? snapshot_view(e->snap)
+                                            : vk_image_view(e->dst, VK_IMAGE_VIEW_TYPE_2D, e->src->format, 0, 1, 0, 1, id, e->sa);
             snap_ok[e->si] = true;
         }
         st.rt_dirty = true;
+    }
+    // Native feedback: the attachment layouts are chosen at begin_pass, so a different set restarts the pass.
+    if (mask != draw_feedback_mask) {
+        if (in_pass) { vk_end_pass(); st.rt_dirty = true; }
+        draw_feedback_mask = mask;
+    }
+    if (native_color && in_pass && !st.rt_dirty) {
+        // Make earlier colour writes visible at the sampled pixel. A local-read dependency keeps the pass open;
+        // without that feature the pass restarts, and its layout transitions provide the dependency.
+        if (g_vk.feedback_local_read) {
+            VkMemoryBarrier2 m = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                .dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT};
+            VkDependencyInfo d = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                .dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT, .memoryBarrierCount = 1, .pMemoryBarriers = &m};
+            vkCmdPipelineBarrier2(vk_cmd(), &d);
+        } else { vk_end_pass(); st.rt_dirty = true; }
     }
 }
 
@@ -4390,7 +4570,60 @@ void vk_gmem_check(uint64_t frame) {
         (unsigned long long)pages, (unsigned long long)first);
 }
 
+// [XCDE] T-LINUX-GTT: scheme adapted from weeping-of-the-empire, fe2345e8,
+// MIT (daniel-madrid-07); see third_party/weeping-of-the-empire/LICENSE.
+#ifdef __linux__
+static bool gmem_import_dma(uint64_t size) {
+    uint64_t full_size = 0;
+    int source_fd = plat_gpu_heap_fd(HEAP_BASE, size, &full_size);
+    if (source_fd < 0) return false;
+    if (!g_vk.dmabuf_import) FATAL("driver-owned heap requires dma-buf Vulkan support; retry with XCDE_GPU_BO=0\n");
+    PFN_vkGetMemoryFdPropertiesKHR get_properties =
+        (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(g_vk.dev, "vkGetMemoryFdPropertiesKHR");
+    VkMemoryFdPropertiesKHR properties = {.sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
+    if (!get_properties || get_properties(g_vk.dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, source_fd, &properties) != VK_SUCCESS)
+        FATAL("dma-buf properties failed; retry with XCDE_GPU_BO=0\n");
+    VkExternalMemoryBufferCreateInfo external = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+    VkBufferCreateInfo buffer_info = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &external, .size = full_size,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
+    VkBuffer buffer;
+    VK_CHECK(vkCreateBuffer(g_vk.dev, &buffer_info, NULL, &buffer));
+    VkMemoryRequirements requirements;
+    vkGetBufferMemoryRequirements(g_vk.dev, buffer, &requirements);
+    uint32_t types = properties.memoryTypeBits & requirements.memoryTypeBits;
+    if (!types || requirements.size > full_size) FATAL("dma-buf heap does not satisfy Vulkan buffer requirements; retry with XCDE_GPU_BO=0\n");
+    int fd = dup(source_fd);
+    if (fd < 0) FATAL("could not duplicate dma-buf fd\n");
+    VkImportMemoryFdInfoKHR imported = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, .fd = fd};
+    VkMemoryDedicatedAllocateInfo dedicated = {.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+        .pNext = &imported, .buffer = buffer};
+    VkMemoryAllocateInfo allocation = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &dedicated,
+        .allocationSize = full_size, .memoryTypeIndex = (uint32_t)__builtin_ctz(types)};
+    VkDeviceMemory memory;
+    VkResult result = vkAllocateMemory(g_vk.dev, &allocation, NULL, &memory);
+    if (result != VK_SUCCESS) {
+        close(fd);  // a successful Vulkan import owns its duplicate; a failed one does not
+        vkDestroyBuffer(g_vk.dev, buffer, NULL);
+        FATAL("dma-buf allocation failed (%d); retry with XCDE_GPU_BO=0\n", result);
+    }
+    VK_CHECK(vkBindBufferMemory(g_vk.dev, buffer, memory, 0));
+    if (gmem_buf) vk_defer_import(gmem_buf, gmem_mem);  // (T254: submitted work may still use the old one)
+    gmem_buf = buffer;
+    gmem_mem = memory;
+    gmem_size = full_size;
+    LOG("[vk] guest heap imported by dma-buf: %llu MiB, driver-owned GTT, memory type %u\n",
+        (unsigned long long)(full_size >> 20), allocation.memoryTypeIndex);
+    return true;
+}
+#endif
+
 static bool gmem_import(uint64_t size) {
+#ifdef __linux__
+    if (gmem_import_dma(size)) return true;
+#endif
     PFN_vkGetMemoryHostPointerPropertiesEXT props =
         (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(g_vk.dev, "vkGetMemoryHostPointerPropertiesEXT");
     VkMemoryHostPointerPropertiesEXT mp = {.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
@@ -4442,7 +4675,7 @@ static uint64_t gmem_tried;  // heap size the import was last attempted for (gme
 
 static VkDescriptorBufferInfo gmem_info(void) {
     static int off = -1;
-    if (off < 0) off = getenv("LARECOMP_VK_NO_GMEM") != NULL || !g_vk.host_import;
+    if (off < 0) off = getenv("LARECOMP_VK_NO_GMEM") != NULL || (!g_vk.host_import && !g_vk.dmabuf_import);  // [XCDE] T-LINUX-GTT
     uint64_t want = (kernel_heap_size() + 0xFFFF) & ~0xFFFFull;
     if (want > HEAP_MAX) want = HEAP_MAX;
     if (!off && want > gmem_size && !gmem_import(want)) {
@@ -4625,6 +4858,22 @@ static struct { VkBuffer b; VmaAllocation m; uint64_t seq; } vc_dead[VC_DEAD];
 static int vc_ndead;
 static int vc_on = -1;
 int vk_vcache_state(void) { return vc_on; }  // -1 not decided yet, 0 off, 1 on (objects.c frame lag)
+// [XCDE] T-FRAME-LAG: objects.c latches "one frame in flight" here once nvnSyncWait decides it. It matters to the vertex
+// cache: the cache keeps vertex / index data safe for a frame the GPU has not finished only because the GPU reads the
+// cache's device-local copies. Those copies are refreshed in the submission, and a copy recorded from guest memory runs
+// when the GPU gets to it - with the GPU a frame behind, that is after the game rewrote those pages with the next
+// frame's data. The draws then read another frame's contents: effect / particle streams change entirely between frames,
+// so they draw as huge stretched quads (the beams and glows in a battle). vc_flush stages written pages through host
+// memory at submit time instead when this is on; with the frame wait intact the direct copy is already ordered.
+static _Atomic bool vc_lag;
+void vk_set_frame_lag(bool on) { atomic_store(&vc_lag, on); }
+// XCDE_VC_STAGE=0: record the refresh from guest memory as before (with the GPU a frame behind that copy can run after
+// the game rewrote the pages: the reference way to reproduce the stretched effect / glow corruption for an A/B).
+static bool vc_stage_on(void) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("XCDE_VC_STAGE"); on = !(e && *e == '0'); }
+    return on;
+}
 // (profiler: draws served / read in place, bytes refreshed, write tracking queries, written pages seen, query time)
 uint64_t prof_vc_hits, prof_vc_bypass, prof_vc_copied, prof_vc_queries, prof_vc_scan_pages, prof_vc_scan_ns;
 
@@ -4823,7 +5072,25 @@ void vc_flush(void) {
             cp[nc++] = (VkBufferCopy){o, o - e->lo, VC_PAGE};
         }
         if (nc) {
-            vkCmdCopyBuffer(cb, gmem_buf, e->buf, (uint32_t)nc, cp);
+            bool gpu_pages = false;  // (a GPU writer may fill part of it: those bytes are only current on the GPU timeline)
+            if (atomic_load(&vc_lag) && vc_stage_on() && vc_page_gpu)
+                for (uint64_t p = e->lo / VC_PAGE; p < e->hi / VC_PAGE && !gpu_pages; p++) gpu_pages = vc_page_gpu[p];
+            if (atomic_load(&vc_lag) && vc_stage_on() && !gpu_pages) {
+                // [XCDE] T-FRAME-LAG: copy the pages out now, while they still hold this submission's data, and let the
+                // GPU read the staged bytes. The ring chunk is not reused before this submission completes.
+                uint64_t total = 0;
+                for (int k = 0; k < nc; k++) total += cp[k].size;
+                VkSpan st = vk_transient(total, 16);
+                uint64_t at = 0;
+                for (int k = 0; k < nc; k++) {
+                    memcpy((uint8_t *)st.ptr + at, (const void *)(uintptr_t)(HEAP_BASE + cp[k].srcOffset), cp[k].size);
+                    cp[k].srcOffset = st.off + at;
+                    at += cp[k].size;
+                }
+                vkCmdCopyBuffer(cb, st.buf, e->buf, (uint32_t)nc, cp);
+            } else {
+                vkCmdCopyBuffer(cb, gmem_buf, e->buf, (uint32_t)nc, cp);
+            }
             for (int k = 0; k < nc; k++) prof_vc_copied += cp[k].size;
         }
         e->gen = g;
@@ -4971,6 +5238,19 @@ static void xsh_stored(int stage) {
         }
         xsh_copy(s, vk_cmd(), a, sz);
     }
+}
+
+// [XCDE] T-STG-WRITERS: would xsh_stored(stage) act for the current storage-buffer bindings? Only when one of them
+// overlaps a mirror or holds an address noted as an in-place read of GPU-written data (otherwise it skips them all).
+static bool xsh_stage_relevant(int stage) {
+    if (!xsh_store_on() || !nwant) return false;
+    for (int i = 0; i < 16; i++) {
+        uint64_t a = st.sbuf[stage][i].addr, sz = st.sbuf[stage][i].size;
+        if (a < HEAP_BASE || !sz || sz > (1ull << 20)) continue;
+        for (int k = 0; k < nxsh; k++) if (xsh[k].base < a + sz && a < xsh[k].base + xsh[k].size) return true;
+        for (int k = 0; k < nwant; k++) if (xsh_want[k] >= a && xsh_want[k] < a + sz) return true;
+    }
+    return false;
 }
 
 static uint64_t g_direct_limit;  // (T175) bytes the buffer guest_direct returned holds from its offset (~0: the rest of it)
@@ -5159,7 +5439,17 @@ static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo
         dummy_report("ranura vacia (textura dummy)", stage, slot, tic, st_->type, audit_fs(), 0, 0, 0, 0);
     if (!view) view = vk_dummy_view(st_->type);
     if (!smp) smp = vk_default_sampler(true);
-    *out = (VkDescriptorImageInfo){smp, view, VK_IMAGE_LAYOUT_GENERAL};
+    VkImageLayout layout = VK_IMAGE_LAYOUT_GENERAL;  // [XCDE] #7: an attachment sampled natively is in the feedback layout
+    if (draw_feedback_mask && g_vk.feedback_loop && h && st.tpool && tic < (uint32_t)st.tpool->count) {
+        NvnTexture *t = ((NvnTexEntry *)st.tpool->entries)[tic].tex;
+        bool snapshot = false;
+        for (int k = 0; k < nfeedback; k++) snapshot |= t == feedback_tex[k];
+        if (!snapshot && t && t != st.rt.depth)
+            for (int k = 0; k < st.rt.ncolor; k++)
+                if (st.rt.color[k] == t && (draw_feedback_mask & (1u << k)))
+                    layout = VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
+    }
+    *out = (VkDescriptorImageInfo){smp, view, layout};
 }
 
 // [XCDE] The unsigned-integer storage view of shader texture slot i (SULD/SUST), or the dummy one.
@@ -5683,7 +5973,9 @@ static void draw(CmdRec *r, bool indexed) {
     PROF_ADD(prof_draw);
 }
 static uint64_t prof_tp_;
+static VkCliffBatch cliff_batch_try(CmdRec *r, Prog *pr);
 static void draw_(CmdRec *r, bool indexed) {
+    cliff_batch_pending.draws = 1;  // [XCDE] T-CLIFF-BATCH
     if (prof) prof_tp_ = SDL_GetTicksNS();
     prewarm_drain();  // [XCDE] T163
     if (!st.program) { SKIPPED(); return; }
@@ -5804,7 +6096,8 @@ static void draw_(CmdRec *r, bool indexed) {
     if (st.rt.depth && st.ds[0] && st.ds[1]) snapshots_invalidate(st.rt.depth);
     snap_reason = "draw-colorwrite";
     for (int i = 0; i < st.rt.ncolor; i++)
-        if (st.rt.color[i] && ((st.channel_mask >> (i * 4)) & 0xF)) snapshots_invalidate(st.rt.color[i]);
+        if (st.rt.color[i] && ((pr->fi->out_mask >> (i * 4)) & 0xF) &&  // [XCDE] #7: targets this shader writes
+            ((st.channel_mask >> (i * 4)) & 0xF)) snapshots_invalidate(st.rt.color[i]);
     // [XCDE] T136: a draw that writes memory (transform feedback capture, shader stores) starts a new pass, i.e. a full
     // barrier *before* it too (one after it was already there). The game refills one grass scratch buffer from offset
     // 0 per batch, right after the previous batch's draws read it as instance data: Maxwell runs draws in order, Vulkan
@@ -5814,9 +6107,26 @@ static void draw_(CmdRec *r, bool indexed) {
     if (xfb || pr->vi->uses_gmem_store) wst |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
     if (pr->fi->uses_gmem_store) wst |= VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
     if (pr->gi && pr->gi->uses_gmem_store) wst |= VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT;
+    // [XCDE] T-STG-WRITERS: a draw whose only memory writes are vertex-shader stores (no transform-feedback emulation,
+    // no fragment/geometry stores) follows NVN's contract: shader stores are unordered against later draws unless the
+    // game calls nvnCommandBufferBarrier, and the game does (0x1 before a mesh's skinning writers, 0x21 after). A census
+    // of the opening battle found such writers never load global memory and consecutive ones write disjoint buffers,
+    // so back-to-back writers share a pass with no barrier between them. T136's rule stays for transform feedback
+    // (ordered in hardware on Maxwell, so the game issues no barrier there), for any non-writer draw that follows (it
+    // restarts behind the barrier as before), and for writers whose storage buffers a T197 store mirror covers or wants.
+    // XCDE_STG_WRITER_PASS=0: the previous behaviour (a pass break and barrier around every writer).
+    static int stg_on = -1;
+    if (stg_on < 0) { const char *e = getenv("XCDE_STG_WRITER_PASS"); stg_on = !(e && atoi(e) == 0); }
+    static bool stg_tail;        // the previous draw was such a writer and left its pass open
+    static uint64_t stg_tail_seq;
+    bool stg_writer = stg_on && !xfb && wst == VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT && !xsh_stage_relevant(0);
+    bool stg_follow = stg_tail && in_pass && !st.rt_dirty && stg_tail_seq == pass_seq_no;
+    stg_tail = false;
     if (wst) {
-        if (in_pass) st.rt_dirty = true;
+        if (in_pass && !(stg_writer && stg_follow)) st.rt_dirty = true;
         pre_wr |= wst;  // (the barrier before it: earlier reads of guest memory first, T136)
+    } else if (stg_follow) {
+        st.rt_dirty = true;  // (a draw after the open writer pass: behind a barrier, as before)
     }
     static int simg_full = -1;  // XCDE_SIMG_FULL=1: storage images untracked (full barriers around their passes, as before)
     if (simg_full < 0) simg_full = getenv("XCDE_SIMG_FULL") != NULL;
@@ -5991,6 +6301,7 @@ static void draw_(CmdRec *r, bool indexed) {
         if (nlog2_++ < 8) LOG("[vk] pipeline not ready: state %d""%c", (int)atomic_load(&pp->state), 10);
         SKIPPED(); return;
     }
+    if (indexed && pr->cliff_candidate) cliff_batch_pending = cliff_batch_try(r, pr);  // [XCDE] T-CLIFF-BATCH
     ss_enabled();
     {   // (profiler) how often a draw repeats the previous draw's program / pipeline
         static Pipe *last_pp; static Prog *last_pr;
@@ -6253,6 +6564,7 @@ static void draw_(CmdRec *r, bool indexed) {
         base_vertex = (int32_t)r->x[4];
         base_inst = (uint32_t)r->x[5];
         inst = (uint32_t)r->x[6] ? (uint32_t)r->x[6] : 1;
+        if (cliff_batch_pending.draws > 1) inst = cliff_batch_pending.draws;  // [XCDE] T-CLIFF-BATCH
         const void *src = (const void *)(uintptr_t)iaddr;
         uint32_t restart = st.prim_restart ? st.restart_index : 0xFFFFFFFFu;
         if (native && itype != 0) {
@@ -6401,11 +6713,19 @@ static void draw_(CmdRec *r, bool indexed) {
     }
     stat_draws++, g_draws_total++;
     cum_draws++;
+    for (int sg = 0; sg < 2; sg++) {  // [XCDE] #7: a storage-image write ends cached feedback reads
+        ShaderInfo *si = sg ? pr->fi : pr->vi;
+        for (int i = 0; i < si->ntex; i++)
+            if (si->tex[i].is_image && (si->tex[i].image_store || si->tex[i].image_atomic)) { vk_feedback_write_boundary(); break; }
+    }
     // [XCDE] T134: a draw whose shaders store to guest memory (XCDE's grass and skinning "writer" point draws) is read by
     // the next draws' vertex fetch; the game issues no barrier in between (Maxwell runs them in order), and Vulkan gives
     // no ordering inside a render pass. Without it the depth prepass drew grass from a half-written vertex buffer, the
     // G-buffer grass then failed its EQUAL depth test: black grass. The next draw starts a new pass behind a full barrier.
-    if (pr->vi->uses_gmem_store || pr->fi->uses_gmem_store || (pr->gi && pr->gi->uses_gmem_store)) {
+    if (stg_writer && !xsh_stage_relevant(0) && in_pass) {  // [XCDE] T-STG-WRITERS: keep the pass open for a following writer
+        stg_tail = true;
+        stg_tail_seq = pass_seq_no;
+    } else if (pr->vi->uses_gmem_store || pr->fi->uses_gmem_store || (pr->gi && pr->gi->uses_gmem_store)) {
         vk_end_pass(); st.rt_dirty = true; pass_untracked = !(mem_track_mode() & 1);
         if (nwant) { if (pr->vi->uses_gmem_store) xsh_stored(0); if (pr->fi->uses_gmem_store) xsh_stored(1); }  // (T197)
     }
@@ -6961,7 +7281,7 @@ static VkPipeline post_pipeline(const char *fs) {
 // Post image `i` at w x h (RGBA8, kept until the size changes). 0, 1: SMAA edges / weights, 2: SMAA output,
 // 3, 4: FSR EASU / RCAS.
 static TexBackend *post_image(int i, uint32_t w, uint32_t h) {
-    static TexBackend img[6];  // (5: T213 the upscaled scene with the HUD)
+    static TexBackend img[7];  // (5: T213 the upscaled scene with the HUD; 6: the native upscalers' sRGB-encoded output)
     TexBackend *d = &img[i];
     if (d->image && (d->width != w || d->height != h)) {
         vk_views_forget(d);
@@ -7071,6 +7391,15 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
         vk_frame_suspend();
         VkImageView t = tmp_upscale(cb, b, v, cam ? (TexBackend *)tmp_depth_tex->backend : NULL, cam ? &tmp_cam : NULL, tmp_jit,
                                     tmp_dm1, ow, oh);
+#ifdef __linux__
+        if (t && (g_settings.upscaler == UPSCALE_FSR4_LITE || g_settings.upscaler == UPSCALE_FSR3)) {  // [XCDE] linear -> sRGB
+            TexBackend *encoded = post_image(6, ow, oh);
+            float pe[8] = {1.0f / ow, 1.0f / oh};
+            post_pass(cb, "tmp_srgb.frag", &t, 1, encoded, pe, false);
+            vk_full_barrier(cb);
+            t = post_view(encoded);
+        }
+#endif
         VkImageView scene = t ? tmp_hud_scene_view(b->width, b->height) : VK_NULL_HANDLE;
         if (scene) {  // [XCDE] T213: the upscaled scene + what the HUD passes added (render size, bilinear)
             fg_scene = t;
@@ -7105,10 +7434,14 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
         float pe[8] = {iw / ow, ih / oh, 0.5f * iw / ow - 0.5f, 0.5f * ih / oh - 0.5f, iw, ih};
         VkImageView ei[3] = {v};
         post_pass(cb, "easu.frag", ei, 1, e, pe, false);
-        float pr[8] = {exp2f(-0.2f), 0, 0, 0, (float)ow, (float)oh};  // (sharpness 0.2 stops: AMD's default)
-        VkImageView ri_[3] = {post_view(e)};
-        post_pass(cb, "rcas.frag", ri_, 1, r, pr, false);
-        v = post_view(r);
+        v = post_view(e);
+        float sharp = xcde_sharpness(&g_settings);  // [XCDE] RCAS strength (default 0.9 = the previous 0.2 stops); 0 = off
+        if (sharp > 0.0f) {
+            float pr[8] = {exp2f(-(2.0f - 2.0f * sharp)), 0, 0, 0, (float)ow, (float)oh};
+            VkImageView ri_[3] = {v};
+            post_pass(cb, "rcas.frag", ri_, 1, r, pr, false);
+            v = post_view(r);
+        }
         upscaled = true;  // [XCDE] v12 #29: the SMAA below then runs at the output size, after the RCAS sharpening
     }
     // [XCDE] v12 #29: the SMAA moved AFTER the upscaler: at the render resolution it only saw the stairs that exist
@@ -7297,6 +7630,98 @@ static void split_submit(void) {
     renderer_submit();
 }
 
+// [XCDE] T-CLIFF-BATCH: gather only the command pattern observed in the cliff
+// census. No sorting, shader rewrite, uniform cache or wider visibility scope.
+static bool cliff_feedback_stable(int stage, const ShaderTexture *tex, NvnTexture *t, Prog *pr) {
+    static int cache = -1;
+    if (cache < 0) {
+        const char *e = getenv("XCDE_FEEDBACK_CACHE");
+        cache = (!e || atoi(e) != 0) && !getenv("LARECOMP_NO_SNAPSHOT_REUSE") && !getenv("LARECOMP_NO_FEEDBACK");
+    }
+    if (!cache || stage != 1 || t == st.rt.depth || tex->type != TEXTYPE_2D ||
+        t->levels > 1 || t->depth > 1 || !feedback_identity_view(stage, tex, t)) return false;
+    bool writes = false, bound = false;
+    for (int i = 0; i < st.rt.ncolor; i++)
+        if (st.rt.color[i] == t && ((pr->fi->out_mask & st.channel_mask) >> (i * 4) & 15)) writes = true;
+    for (int i = 0; i < nfeedback; i++) if (feedback_tex[i] == t && feedback_view[i]) bound = true;
+    if (!writes || !bound) return false;
+    // As in resolve_feedback, queued pixels/resizes must be handled BEFORE the
+    // stamp check. This does not extend the existing snapshot's visibility scope.
+    TexBackend *src = vk_tex(t, true);
+    if (!src) return false;
+    for (int i = 0; i < nsnaps; i++) {
+        Snap *s = &snaps[i];
+        if (s->key == t && s->copy.image && s->copy.image != src->image &&
+            s->visibility == feedback_visibility && s->frame == renderer_present_count() &&
+            s->source_image == src->image && s->copy.width == src->width &&
+            s->copy.height == src->height && s->copy.format == src->format) return true;
+    }
+    return false;
+}
+static VkCliffBatch cliff_batch_try(CmdRec *r, Prog *pr) {
+    VkCliffBatch none = {.draws = 1};
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("XCDE_CLIFF_BATCH"); on = !e || atoi(e) != 0; }
+    if (!on || !pr->cliff_candidate) return none;
+    if (g_debug_frame || g_gpuprof_frame || ck_on() || st.xfb_on || st.raster_discard ||
+        st.nstream != 2 || st.stream[0][1] || st.stream[1][1] != 1 ||
+        st.color_state[0] || st.prim_restart || r->x[0] != 4 || r->x[5] || r->x[6] > 1 ||
+        pr->gi || pr->vi->uses_gmem || pr->fi->uses_gmem || pr->fi->writes_depth)
+        return none;
+    uint32_t stride = st.stream[1][0];
+    if (stride != 52 || st.rt.ncolor != 5 || !st.rt.depth || !st.ds[0] || !st.ds[1] || st.ds[2] != 4)
+        return none;  // (only the measured G-buffer shape)
+    // Tint support is injected into ordinary colour shaders too; only an active
+    // per-instance highlight would make its draw splitting relevant.
+    extern bool pot_glow_active(void);
+    if (pr->fi->uses_tint && pot_glow_active()) return none;
+    bool instance_attr = false;
+    for (int i = 0; i < 32; i++) {
+        if (!(pr->vi->attr_mask & (1u << i))) continue;
+        if (i >= st.nattrib) return none;
+        uint32_t a = st.attrib[i], stream = (a >> 8) & 31;
+        if (stream > 1) return none;
+        if (stream == 1) {
+            // Only the measured float matrix rows and scalar fit this 52-byte record.
+            uint32_t fmt = a & 255, width = fmt == 0x2e ? 16 : fmt == 0x0a ? 4 : 0;
+            if (!width || width > stride || (a >> 13) > stride - width) return none;
+            instance_attr = true;
+        }
+    }
+    if (!instance_attr || st.vbuf[1].addr < HEAP_BASE || st.vbuf[1].addr - HEAP_BASE >= HEAP_MAX ||
+        st.vbuf[1].size > HEAP_MAX - (st.vbuf[1].addr - HEAP_BASE)) return none;
+    VkCliffRange first = {st.vbuf[1].addr, st.vbuf[1].size};
+    VkCliffBatch batch = vk_cliff_batch_scan(r, first, st.stream, 64);
+    if (batch.draws < 2) return none;
+    // Live feedback reads stay per-draw. Only the already resolved, visibility-
+    // scoped colour snapshot can remain constant across a group.
+    for (int stage = 0; stage < 2; stage++) {
+        ShaderInfo *si = stage ? pr->fi : pr->vi;
+        for (int i = 0; i < si->ntex; i++) {
+            if (si->tex[i].is_image || si->tex[i].bindless) return none;
+            NvnTexture *t = shader_texture_object(stage, &si->tex[i]);
+            if (!t) continue;
+            if (naliases && alias_read(t) != t) return none;
+            if (is_attachment(t)) {
+                if (!cliff_feedback_stable(stage, &si->tex[i], t, pr)) return none;
+                continue;
+            }
+            uint64_t tsize = tegra_total_size(&t->layout);
+            if (!tsize) return none;
+            for (int j = -1; j < st.rt.ncolor; j++) {
+                NvnTexture *rt = j < 0 ? st.rt.depth : st.rt.color[j];
+                if (!rt) continue;
+                if (t == rt || t->addr == rt->addr) return none;
+                uint64_t rsize = tegra_total_size(&rt->layout);
+                if (!rsize || (t->addr < rt->addr ? rt->addr - t->addr < tsize : t->addr - rt->addr < rsize)) return none;
+                TexBackend *tb = t->backend, *rb = rt->backend;
+                if (tb && rb && tb->image && tb->image == rb->image) return none;
+            }
+        }
+    }
+    return batch;
+}
+
 static void exec_list(uint64_t handle, int depth) {
     uint64_t p = handle;
     for (int guard = 0; guard < 10000000; guard++) {
@@ -7446,6 +7871,7 @@ static void exec_list(uint64_t handle, int depth) {
             }
             break;
         case CMD_BARRIER:
+            if ((uint32_t)r->x[0]) vk_feedback_write_boundary();  // [XCDE] #7: guest texture-visibility boundary
             // [XCDE] T133: nvnCommandBufferBarrier(bits). XCDE computes skinning palettes on the GPU (vertex shaders of
             // point draws storing to memory) into one scratch range that each mesh's writer refills from index 0;
             // the barrier keeps a mesh's draw after its writer and before the next writer. Dropped, the draws
@@ -7530,7 +7956,23 @@ static void exec_list(uint64_t handle, int depth) {
             break;
         case CMD_DISPATCH: dispatch_compute((uint32_t)r->x[0], (uint32_t)r->x[1], (uint32_t)r->x[2]); break;
         case CMD_DRAW_ARRAYS: draw(r, false); split_submit(); break;
-        case CMD_DRAW_ELEMENTS: draw(r, true); split_submit(); break;
+        case CMD_DRAW_ELEMENTS:
+            draw(r, true);
+            if (cliff_batch_pending.draws > 1) {  // [XCDE] T-CLIFF-BATCH: the group's commands were executed as one draw
+                uint32_t saved = cliff_batch_pending.draws - 1;
+                st.vbuf[1] = (Range){cliff_batch_pending.last.addr, cliff_batch_pending.last.size};
+                op_counts[CMD_BIND_VERTEX_BUFFERS] += cliff_batch_pending.vertex_binds;
+                op_counts[CMD_BIND_VERTEX_STREAM] += cliff_batch_pending.stream_binds;
+                op_counts[CMD_DRAW_ELEMENTS] += saved;
+                cliff_batch_groups++;
+                cliff_batch_saved += saved;
+                split_since += saved;  // (retain the logical draw budget for bounded submission)
+                split_submit();
+                p = (uint64_t)(uintptr_t)cliff_batch_pending.next;
+                continue;
+            }
+            split_submit();
+            break;
         case CMD_UPDATE_UNIFORM_BUFFER:
             watch_mem_note("inline uniform update", r->x[0] + r->x[2], r->x[3]);
             memcpy((void *)(uintptr_t)(r->x[0] + r->x[2]), x, r->x[3]);

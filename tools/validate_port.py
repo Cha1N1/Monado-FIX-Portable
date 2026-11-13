@@ -31,7 +31,12 @@ def main():
     if not (args.clang.is_file() if args.clang else Path(zig).is_file()) or not (sdk / 'include/vulkan/vulkan.h').is_file():
         parser.error('Missing Zig/SDK. See docs/PORT_VALIDATION.md for project-local setup.')
     inc = ['-Iruntime', '-Iruntime/nvn', '-Ithird_party', '-Ithird_party/imgui',
-           '-Ithird_party/imgui/backends', '-Ithird_party/streamline/include', f'-I{sdk / "include"}']
+           '-Ithird_party/imgui/backends', '-Ithird_party/streamline/include']
+    def includes(cpp=False):
+        # Zig's libc++ ships its own C headers (string.h, math.h, ...). They have to be found before the SDK's CRT
+        # headers, or libc++ mixes two libc header sets and fails to compile; -idirafter still finds SDL3/Vulkan/VMA.
+        sdk_inc = ['-idirafter', str(sdk / 'include')] if cpp else [f'-I{sdk / "include"}']
+        return [*inc, *sdk_inc]
     failures = []
     skipped = []
     def compiler(cpp=False):
@@ -69,12 +74,12 @@ def main():
 
     sources = ['host/settings_ini.c', 'hle/framepace.c', 'hle/party.c', 'hle/bindings.c', 'services/fs.c', 'diag/diag.c', 'nvn/objects.c', 'services/romfs_virtual.c', 'nvn/output_scale.c',
                'nvn/vulkan/device.c', 'nvn/vulkan/exec.c', 'nvn/vulkan/shaders.c',
-               'nvn/vulkan/textures.c', 'nvn/vulkan/precompile.c', 'nvn/vulkan/temporal.c',
+               'nvn/vulkan/textures.c', 'nvn/vulkan/precompile.c', 'nvn/vulkan/temporal.c', 'nvn/vulkan/vkq.c',
                'nvn/vulkan/imgui_glue.cpp', 'ui/menu_vk.cpp', 'nvn/vulkan/dlss.cpp']
     for source in sources:
         cpp = source.endswith('.cpp')
         run(source.replace('/', '_'), [*compiler(cpp), '-c', '-w',
-            '-std=c++17' if cpp else '-std=gnu11', *inc, ROOT / 'runtime' / source,
+            '-std=c++17' if cpp else '-std=gnu11', *includes(cpp), ROOT / 'runtime' / source,
             '-o', output / (source.replace('/', '_') + '.o')])
     extra_sources = {
         'test_settings_roundtrip': ['runtime/host/settings_ini.c'],
@@ -99,7 +104,7 @@ def main():
         if test in ('test_tegra_copy', 'test_tegra_block_height', 'test_condvar'):
             extra = [*extra, str(sdk / 'lib/libwinpthread.dll.a')]
         warnings = ['-Wall', '-Wextra', '-Werror'] if test in ('test_display_options', 'test_port_core', 'test_gpu_probe', 'test_settings_roundtrip') else ['-w']
-        if run(test + '_build', [*compiler(), '-std=gnu11', *warnings, *inc, '-Iruntime/nvn/maxwell',
+        if run(test + '_build', [*compiler(), '-std=gnu11', *warnings, *includes(), '-Iruntime/nvn/maxwell',
                                 ROOT / 'tests/native' / f'{test}.c', *extra, '-o', exe]):
             if args.compile_only:
                 skipped.append(test)
@@ -115,7 +120,7 @@ def main():
         else:
             skipped.append('test_nvidia_signature')
             print('test_nvidia_signature: NOT EXECUTED (compile-only or official DLL absent)', flush=True)
-    run('gpu_diagnostics_build', [*compiler(), '-std=c11', *inc, 'tools/gpu_diagnostics.c', *libs,
+    run('gpu_diagnostics_build', [*compiler(), '-std=c11', *includes(), 'tools/gpu_diagnostics.c', *libs,
                                   '-o', output / 'gpu_diagnostics.exe'])
     if args.build_ui:
         files = ['imgui.cpp', 'imgui_draw.cpp', 'imgui_tables.cpp', 'imgui_widgets.cpp',
@@ -123,7 +128,7 @@ def main():
         objects = []
         for source in [*(str(ROOT / 'third_party/imgui' / f) for f in files), str(ROOT / 'tools/launcher/launcher.cpp')]:
             obj = output / (Path(source).stem + '.o')
-            if run(Path(source).stem + '_build', [*compiler(True), '-O1', '-std=c++17', '-w', *inc, '-c', source, '-o', obj]):
+            if run(Path(source).stem + '_build', [*compiler(True), '-O1', '-std=c++17', '-w', *includes(True), '-c', source, '-o', obj]):
                 objects.append(obj)
         if len(objects) == len(files) + 1:
             run('launcher_link', [*compiler(True), *objects, *libs, '-static-libstdc++', '-static-libgcc',
