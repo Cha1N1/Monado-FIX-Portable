@@ -401,12 +401,24 @@ static void create_device(void) {
         vkGetPhysicalDeviceFeatures2(g_vk.phys, &afl_q);
         g_vk.feedback_loop = afl_have.attachmentFeedbackLoopLayout == VK_TRUE;
     }
-    LOG("[vk] attachment feedback loop layout: %s\n", g_vk.feedback_loop ? "on" : "not available");
+    LOG("[vk] attachment feedback loop layout: %s\n", g_vk.feedback_loop ? "on (native colour feedback)" : "not available (snapshot copies)");
+    // [XCDE] #7: with dynamicRenderingLocalRead a by-region barrier inside rendering makes the previous draw's colour
+    // writes visible to this draw's feedback reads without ending the pass; without it the pass is restarted instead.
+    VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR local_read = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR};
+    if (g_vk.feedback_loop && has_ext(ep, ne, VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME)) {
+        VkPhysicalDeviceFeatures2 lr_q = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &local_read};
+        vkGetPhysicalDeviceFeatures2(g_vk.phys, &lr_q);
+        g_vk.feedback_local_read = local_read.dynamicRenderingLocalRead == VK_TRUE;
+        if (g_vk.feedback_local_read) ext[n_ext++] = VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME;
+    }
+    local_read.pNext = NULL;
     // [XCDE] v12: attachment feedback loop layout enable (chained only when the device has the extension + feature:
     // chaining a feature struct without support fails vkCreateDevice and the game would not boot)
     VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT afl = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_FEATURES_EXT,
-        .attachmentFeedbackLoopLayout = g_vk.feedback_loop ? VK_TRUE : VK_FALSE};
+        .attachmentFeedbackLoopLayout = g_vk.feedback_loop ? VK_TRUE : VK_FALSE,
+        .pNext = g_vk.feedback_local_read ? (void *)&local_read : NULL};
     VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT div = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT,
         .vertexAttributeInstanceRateDivisor = g_vk.divisor ? VK_TRUE : VK_FALSE,

@@ -664,20 +664,32 @@ static void fvalfind(void) {
 #endif
 }
 
-static void ui_speed_fix(void) {
-    static float ref, last;
-    static int have;
-    uint64_t pp = *(volatile uint64_t *)(uintptr_t)0x7000b8a278ull;
-    if (!pp) return;
-    uint64_t go = *(volatile uint64_t *)(uintptr_t)pp;
-    if (!go) return;
-    volatile float *f = (volatile float *)(uintptr_t)(go + 0x70);
-    int fps = xcde_present_fps();
-    float k = fps > 0 ? 30.0f / (float)fps : 1.0f;
-    float cur = *f;
-    if (!have || cur != last) { ref = cur; have = 1; }
-    last = ref * k;
-    *f = last;
+// [XCDE] Menu/layout animation speed above 30 FPS (replaces PR #13's ui_speed_fix).
+// XCDE 2.0.0: the layout library has its own fixed 1/30-second clock in the singleton at [0x7000ba1240]:
+// +0x6c is the authored animation rate (30) and +0x70 the seconds advanced per update. f_700074ef00 multiplies
+// that step by the layout speed (+0x218) and the pause/time scale (+0x80); f_700074eb10 / f_700074ed00 add the
+// result to fractional animation progress, so rendering at 120 FPS played every menu animation 4x too fast.
+// Write the real elapsed time of this frame into +0x70 only. The authored rate and the game's own pause/speed
+// multipliers are left untouched (scaling +0x70 by 30/fps assumed a perfectly steady frame rate and froze a
+// reference value). Discontinuities above 250 ms (loading, debugger, stall) use one original 1/30 step instead
+// of fast-forwarding. XCDE_MENU_TIMING=0 restores the game's fixed clock for comparison.
+static void menu_clock_update(void) {
+    static int enabled = -1;
+    static uint64_t previous;
+    if (enabled < 0) {
+        const char *e = ENV("XCDE_MENU_TIMING");
+        enabled = !e || atoi(e) != 0;
+    }
+    if (!enabled) return;
+    uint64_t now = xcde_frame_now_ns();  // virtual time in deterministic runs
+    double dt = previous && now > previous ? (double)(now - previous) * 1e-9 : 0;
+    previous = now;
+    if (!(dt > 0 && dt <= 0.25)) dt = 1.0 / 30.0;
+    uint64_t ui = *(volatile uint64_t *)(uintptr_t)0x7000ba1240ull;
+    if (ui < 0x7000000000ull || ui > 0x731fffff00ull || (ui & 7)) return;
+    volatile float *rate = (volatile float *)(uintptr_t)(ui + 0x6c);
+    if (*rate != 30.0f) return;  // wait for the layout singleton's initialization
+    *(volatile float *)(uintptr_t)(ui + 0x70) = (float)dt;
 }
 
 void xcde_limiter_done(void) {
@@ -690,7 +702,7 @@ void xcde_limiter_done(void) {
     statesnap();
     deltafind();
     fps_interval_force();
-    ui_speed_fix();
+    menu_clock_update();
     static int on = -1;
     if (on < 0) { const char *e = ENV("XCDE_LIMITER_SLEEP"); on = (!e || atoi(e) != 0) && !diag_deterministic(); }
     if (!on) return;

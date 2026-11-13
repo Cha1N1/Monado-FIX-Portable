@@ -29,7 +29,7 @@ Every edit to a copied file is marked `[XCDE]` (the project's working name) and 
 | SMAA (reference shader and lookup textures) | MIT-style (`third_party/smaa/LICENSE.txt`) |
 | AMD FidelityFX API headers (FSR 3.1 / frame generation) | MIT |
 | NVIDIA Streamline headers (DLSS) | MIT (`third_party/streamline/license.txt`) |
-| weeping-of-the-empire (daniel-madrid-07, fe2345e8) | MIT (`third_party/weeping-of-the-empire/LICENSE`); the Linux AMDGPU GTT / dma-buf guest heap is adapted in `runtime/platform/linux_gpu.h` and the Vulkan import in `runtime/nvn/vulkan/exec.c` |
+| weeping-of-the-empire (daniel-madrid-07, fe2345e8) | MIT (`third_party/weeping-of-the-empire/LICENSE`); the Linux AMDGPU GTT / dma-buf guest heap is adapted in `runtime/platform/linux_gpu.h` and the Vulkan import in `runtime/nvn/vulkan/exec.c`; its visibility-scoped feedback copies are the design reference for `resolve_feedback` (no code copied) |
 | Optional native AMD FSR 3.1.4 upscaler and Vulkan backend, SDK 1.1.4 (`c6efa6bf7f2027b3ec94f28578bb5965eabb9e55`) | AMD SDK MIT terms (`third_party/fsr3_native/LICENSE-AMD.txt`); fetched at build time from GPUOpen-LibrariesAndSDKs/FidelityFX-SDK; Linux adapter/preparation described in `third_party/fsr3_native/README.md` |
 | bcdec (BC texture decoding) | MIT or public domain (Unlicense), at the user's choice |
 
