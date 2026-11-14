@@ -148,7 +148,14 @@ static bool native_temporal(void) {
     return false;
 #endif
 }
-bool tmp_jitter_active(void) { return env_int("XCDE_TMP_JIT_FORCE") != 0 || (native_temporal() && !env_int("XCDE_TMP_NOJITTER")); }  // (romfs_virtual.c queries: the game's own AA may stay on when no jitter)
+// GitHub #29: every temporal upscaler (FSR 3, FSR 4 Lite, DLSS / DLAA) gets the Halton jitter on every platform. With
+// none (#14's default on Windows) they have no sub-pixel samples to accumulate, so edges and foliage shimmer. #14's
+// flicker came from a single Vega iGPU and predates the Balanced render-grid and camera-cut fixes; the native Linux
+// FSR paths have been steady with this same jitter. XCDE_TMP_NOJITTER=1 turns it off for comparison.
+static bool temporal_upscaler(void) {
+    return g_settings.upscaler == UPSCALE_FSR3 || g_settings.upscaler == UPSCALE_FSR4_LITE || g_settings.upscaler == UPSCALE_DLSS;
+}
+bool tmp_jitter_active(void) { return env_int("XCDE_TMP_JIT_FORCE") != 0 || (temporal_upscaler() && !env_int("XCDE_TMP_NOJITTER")); }
 void tmp_jitter(float j[2]) {
     static int decide = -1;  // 1 = produce a Halton jitter, 0 = images are drawn unjittered
     if (decide < 0) {
