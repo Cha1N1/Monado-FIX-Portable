@@ -234,8 +234,17 @@ static int vk_counter_mode(void) {
     if (counter_mode < 0 && diag_deterministic()) counter_mode = 1;  // [XCDE] T029: one virtual timestamp per frame
     if (counter_mode < 0) {
         const char *e = getenv("LARECOMP_VK_COUNTER");
-        counter_mode = e && !strcmp(e, "cpu") ? 0 : e && !strcmp(e, "frozen") ? 1 : e && !strcmp(e, "legacy") ? 3 : 2;
+        // [XCDE] GitHub #29: the game lowers its scene resolution (to 70 %) from these GPU times, then stretches the image
+        // itself before the upscalers: with frame lag the GPU never idles, the times always looked slow, and FSR / DLSS
+        // got an 896x504 scene - blurry standing still, the jitter magnified. Its timer pairs (start / end slots 32 bytes
+        // apart) never matched the 16-byte pacing pairs below. Default: one timestamp per presented frame, so the game
+        // keeps 1280x720. XCDE_GAME_DYNRES=1 (or LARECOMP_VK_COUNTER=gpu): real GPU times, as on the Switch.
+        const char *dr = getenv("XCDE_GAME_DYNRES");
+        int dflt = dr && atoi(dr) != 0 ? 2 : 1;
+        counter_mode = e && !strcmp(e, "cpu") ? 0 : e && !strcmp(e, "frozen") ? 1 : e && !strcmp(e, "legacy") ? 3 : e && !strcmp(e, "gpu") ? 2 : dflt;
         if (counter_mode == 2 && !g_vk.props.limits.timestampComputeAndGraphics) counter_mode = 0;
+        LOG("[vk] GPU timing counters: %s\n", counter_mode == 1 ? "one per frame (the game keeps its full resolution)" :
+            counter_mode == 2 ? "GPU times" : counter_mode == 0 ? "host clock" : "legacy");
     }
     return counter_mode;
 }
