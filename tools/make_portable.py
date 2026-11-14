@@ -6,7 +6,7 @@
 The result runs from anywhere (another drive, another PC, a USB disk): no MSYS2, no Git, no Python needed.
 It holds build/xcde.exe, build/xcde_launcher.exe, every non-system DLL they need (found by reading the PE import
 tables, recursively, so it does not depend on `ldd`), targets/ (a REAL copy of exefs + romfs, even if your targets/
-is a link), data/, mods/, xcde.ini, save/ and "Play Monado.bat".
+is a link), data/, mods/, xcde.ini / xcde_env.ini, save/ and "Play Monado.bat".
 
 NOT copied: cache/ (shader caches are rebuilt on each PC by the launcher's "Precompile shaders"; --with-cache
 copies the portable part). targets/ is copied as real files and verified (no links to your original folder).
@@ -222,7 +222,7 @@ PLAY_BAT = ('@echo off\r\n'
             'start "" "build\\xcde_launcher.exe"\r\n')
 
 
-CLEAN_BAT = '@echo off\r\nrem Monado: borra lo que es de ESTA PC (cache de shaders/pipelines, reportes de crash, logs).\r\nrem Corre esto antes de mover o copiar la carpeta a otra PC. NO toca save\\, xcde.ini ni el juego.\r\ncd /d "%~dp0"\r\necho.\r\necho  Se borrara: cache\\  crash\\  y los .log de build\\\r\necho  (Las partidas en save\\ y los ajustes NO se tocan. En esta PC tendras que volver a pulsar "Precompile shaders".)\r\nchoice /m " Continuar"\r\nif errorlevel 2 exit /b 0\r\nif exist "cache" rmdir /s /q "cache"\r\nif exist "crash" rmdir /s /q "crash"\r\ndel /q "build\\*.log" 2>nul\r\necho.\r\necho  Listo.\r\npause\r\n'
+CLEAN_BAT = '@echo off\r\nrem Monado: borra lo que es de ESTA PC (cache de shaders/pipelines, reportes de crash, logs).\r\nrem Corre esto antes de mover o copiar la carpeta a otra PC. NO toca save\\, xcde.ini / xcde_env.ini ni el juego.\r\ncd /d "%~dp0"\r\necho.\r\necho  Se borrara: cache\\  crash\\  y los .log de build\\\r\necho  (Las partidas en save\\ y los ajustes NO se tocan. En esta PC tendras que volver a pulsar "Precompile shaders".)\r\nchoice /m " Continuar"\r\nif errorlevel 2 exit /b 0\r\nif exist "cache" rmdir /s /q "cache"\r\nif exist "crash" rmdir /s /q "crash"\r\ndel /q "build\\*.log" 2>nul\r\necho.\r\necho  Listo.\r\npause\r\n'
 
 
 def main():
@@ -332,8 +332,9 @@ def main():
             shutil.copy2('cache/variants.bin', os.path.join(out, 'cache', 'variants.bin'))
     if not a.no_saves and os.path.isdir('save'):
         copy_tree('save', os.path.join(out, 'save'), 'save/')
-    if os.path.isfile('xcde.ini') and not a.release:
-        shutil.copy2('xcde.ini', os.path.join(out, 'xcde.ini'))
+    for settings in ('xcde.ini', 'xcde_env.ini'):  # (player settings: never in a release package)
+        if os.path.isfile(settings) and not a.release:
+            shutil.copy2(settings, os.path.join(out, settings))
     with open(os.path.join(out, 'Play Monado.bat'), 'w', newline='') as f:
         f.write(PLAY_BAT)
     with open(os.path.join(out, 'Limpiar Monado.bat'), 'w', newline='') as f:

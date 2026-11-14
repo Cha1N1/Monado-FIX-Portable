@@ -18,6 +18,7 @@ build/
 crash/
 play/
 xcde.ini
+xcde_env.ini
 mods/
 reports/
 sdk/

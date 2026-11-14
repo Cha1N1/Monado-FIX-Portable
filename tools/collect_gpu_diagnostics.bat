@@ -13,6 +13,7 @@ if not errorlevel 1 (
   echo vulkaninfo.exe was not found in PATH. Install Vulkan SDK or add its Bin directory to PATH. > "%OUT%\vulkaninfo-summary.txt"
 )
 if exist xcde.ini copy /y xcde.ini "%OUT%\xcde.ini" >nul
+if exist xcde_env.ini copy /y xcde_env.ini "%OUT%\xcde_env.ini" >nul
 if exist build\validation\gpu_diagnostics.exe (
   build\validation\gpu_diagnostics.exe > "%OUT%\monado-adapters.txt" 2>&1
 )

@@ -3,6 +3,8 @@
 // (runtime/host/settings_ini.c). Build: tools/launcher/build.sh. Run: "Play Monado.bat" at the repository root.
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
+#include <ctype.h>
+#include <float.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -106,6 +108,12 @@ static int key_from_ini(const char *v) {
     return strcmp(v, "none") ? SDL_GetScancodeFromName(v) : SDL_SCANCODE_UNKNOWN;
 }
 
+// [XCDE] Environment variables for the game (Diagnostics tab): NAME=VALUE lines in xcde_env.ini, applied to the game
+// process when the launcher starts it (for example XCDE_RSC_PIXEL=1). A separate file because the in-game menu
+// rewrites xcde.ini when the player applies settings (and xcde_ini_commit keeps old keys, so removals would survive).
+enum { NENV = 32 };
+struct EnvVar { char name[96]; char value[512]; };
+
 struct Cfg {
     char gpu_uuid[33] = "";
     int vulkan_api = 0;
@@ -150,6 +158,8 @@ struct Cfg {
     bool rumble = true;     // [XCDE] hand the game's controller vibration to SDL (xcde.ini rumble)
     int ui_lang = 1;            // the launcher's own language: 0 Spanish, 1 English (xcde.ini launcher_lang)
     int icons = 0;              // button prompts: 0 auto (the connected controller, else the keyboard), 1 Switch, 2 Xbox, 3 PlayStation, 4 keyboard
+    EnvVar env[NENV] = {};      // [XCDE] environment variables for the game (xcde_env.ini)
+    int nenv = 0;
 };
 // [XCDE] button prompt packs: romfs mods the player installs (GameBanana, CompC: "Xbox control layout" 694794,
 // "PS5 DualSense control layout" 541180 - CC BY-NC-ND, so not shipped) in these folders; the launcher turns the one
@@ -355,10 +365,10 @@ static const char *const k_en[][2] = {
      "area doesn't stop to compile them. Only needed once (or after updating the game)."},
     {"Guardar ajustes", "Save settings"}, {"Ajustes guardados en xcde.ini", "Settings saved to xcde.ini"},
     {"No se pudo escribir xcde.ini", "Could not write xcde.ini"}, {"Crear reporte", "Create report"},
-    {"Junta en un .zip los logs de las dos últimas partidas, xcde.ini y el último informe de\n"
-     "cierre inesperado (sin partidas guardadas ni archivos del juego), para adjuntarlo a un reporte.",
-     "Puts in a .zip the logs of the last two sessions, xcde.ini and the latest crash report\n"
-     "(no saves or game files), to attach to a bug report."},
+    {"Junta en un .zip los logs de las dos últimas partidas, los ajustes (xcde.ini / xcde_env.ini)\n"
+     "y el último informe de cierre inesperado (sin partidas guardadas ni archivos del juego), para adjuntarlo a un reporte.",
+     "Puts in a .zip the logs of the last two sessions, the settings (xcde.ini / xcde_env.ini)\n"
+     "and the latest crash report (no saves or game files), to attach to a bug report."},
     {"AMD FSR 4 Lite (temporal, nativo)", "AMD FSR 4 Lite (temporal, native)"},
     {"Salir", "Quit"}, {"No se pudo iniciar build/xcde.exe (error ", "Could not start build/xcde.exe (error "},
     {"Juego iniciado. Registro: build/last_game.log", "Game started. Log: build/last_game.log"},
@@ -392,6 +402,15 @@ static const char *const k_en[][2] = {
      "Prevents models and textures from corrupting in long sessions.\n"
      "Disables the async render thread (slightly less performance)."},
     {"Idioma del launcher", "Launcher language"},
+    {"Variables de entorno", "Environment variables"},
+    {"Se pasan al juego al iniciar. Ejemplo: XCDE_RSC_PIXEL=1 (se aplica la próxima vez que pulses JUGAR).",
+     "Passed to the game when it starts. Example: XCDE_RSC_PIXEL=1 (applied the next time you press PLAY)."},
+    {"Se guardan en xcde_env.ini (también puedes editarlas ahí).", "Saved in xcde_env.ini (you can also edit them there)."},
+    {"Añadir variable", "Add variable"}, {"Nombre", "Name"}, {"Valor", "Value"}, {"Quitar", "Remove"},
+    {"No hay variables de entorno.", "No environment variables."},
+    {"Nombre no válido: usa letras, números y _ (sin empezar por un número).",
+     "Invalid name: use letters, digits and _ (not starting with a digit)."},
+    {"No se pudieron guardar los ajustes", "Could not save the settings"},
 };
 static const char *T(const char *es) {
     if (g.ui_lang != 1) return es;
@@ -446,7 +465,78 @@ static int find(const char *const *list, int n, const char *v) {
     return -1;
 }
 
+// [XCDE] game environment (Diagnostics tab). Only conventional names are passed to the OS: letters, digits and '_',
+// not starting with a digit (Windows and POSIX both reject/ignore '=' and other separators).
+static const char *const k_env_file = "xcde_env.ini";
+static bool env_name_valid(const char *s) {
+    if (!s || !*s || !(isalpha((unsigned char)*s) || *s == '_')) return false;
+    for (s++; *s; s++) if (!(isalnum((unsigned char)*s) || *s == '_')) return false;
+    return true;
+}
+static void apply_env() {
+    for (int i = 0; i < g.nenv; i++) {
+        if (!env_name_valid(g.env[i].name) || !g.env[i].name[0]) continue;
+#ifdef _WIN32
+        SetEnvironmentVariableA(g.env[i].name, g.env[i].value);
+#else
+        setenv(g.env[i].name, g.env[i].value, 1);
+#endif
+    }
+}
+static void load_env() {
+    g.nenv = 0;
+    FILE *f = fopen(path(k_env_file).c_str(), "r");
+    if (!f) return;
+    char line[1024];
+    while (fgets(line, sizeof line, f) && g.nenv < NENV) {
+        char *s = line;
+        if (strlen(s) >= 3 && !memcmp(s, "\xEF\xBB\xBF", 3)) s += 3;  // (a UTF-8 BOM: the file was saved from Notepad)
+        char *e = s + strlen(s);
+        while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r' || e[-1] == '\n')) *--e = 0;
+        while (*s == ' ' || *s == '\t') s++;
+        if (!*s || *s == '#' || *s == ';') continue;
+        char *eq = strchr(s, '=');
+        if (!eq) continue;
+        *eq = 0;
+        char *name = s, *value = eq + 1;
+        for (char *n = name + strlen(name); n > name && (n[-1] == ' ' || n[-1] == '\t'); ) *--n = 0;
+        while (*value == ' ' || *value == '\t') value++;
+        if (!env_name_valid(name) || strlen(name) >= sizeof g.env[0].name) continue;
+        snprintf(g.env[g.nenv].name, sizeof g.env[0].name, "%s", name);
+        snprintf(g.env[g.nenv].value, sizeof g.env[0].value, "%s", value);
+        g.nenv++;
+    }
+    fclose(f);
+}
+static bool save_env() {
+    std::string p = path(k_env_file);
+    char tmp[1200];
+    FILE *f = xcde_ini_begin(p.c_str(), tmp, sizeof tmp);
+    if (!f) return false;
+    fprintf(f, "# Monado environment variables (written by the launcher)\n");
+    fprintf(f, "# NAME=VALUE lines; passed to the game when it starts (Diagnostics tab)\n");
+    for (int i = 0; i < g.nenv; i++)
+        if (env_name_valid(g.env[i].name)) fprintf(f, "%s=%s\n", g.env[i].name, g.env[i].value);
+    bool ok = !ferror(f) && fflush(f) == 0;
+    if (fclose(f) != 0) ok = false;
+    if (ok) ok = xcde_atomic_replace(tmp, p.c_str()) != 0;
+    if (!ok) remove(tmp);
+    return ok;
+}
+// blank rows are editing space only: drop them when saving / applying / playing (they are never written to the file)
+static void env_prune() {
+    int n = 0;
+    for (int i = 0; i < g.nenv; i++) {
+        if (!g.env[i].name[0]) continue;
+        if (n != i) g.env[n] = g.env[i];
+        n++;
+    }
+    g.nenv = n;
+}
+
 static void load() {
+    g.nenv = 0;
+    load_env();
     for (int i = 0; i < NPAD; i++) g.pad[i] = k_def_pad[i];
     for (int i = 0; i < NACT; i++) g.key[i] = k_def_key[i], g.key2[i] = k_def_key2[i];
     FILE *f = fopen(path("xcde.ini").c_str(), "r");
@@ -527,6 +617,7 @@ static void load() {
 }
 
 static bool save() {
+    env_prune();  // [XCDE] blank environment rows are not settings
     std::string settings_path = path("xcde.ini");
     char tmp[1200];
     FILE *f = xcde_ini_begin(settings_path.c_str(), tmp, sizeof tmp);
@@ -568,7 +659,8 @@ static bool save() {
     fprintf(f, "mouse_look = %d\nmouse_sens = %d\nmouse_invert = %d\n", g.mouse_look, g.mouse_sens, g.mouse_invert);
     fprintf(f, "stick_deadzone = %d\nrumble = %d\n", g.stick_deadzone, g.rumble);
     fprintf(f, "launcher_lang = %s\n", g.ui_lang ? "en" : "es");
-    return xcde_ini_commit(f, tmp, settings_path.c_str()) != 0;
+    if (xcde_ini_commit(f, tmp, settings_path.c_str()) == 0) return false;
+    return save_env();  // [XCDE] the game's environment (xcde_env.ini)
 }
 
 
@@ -665,7 +757,8 @@ static void dump_poll() {
 #endif
 
 static void launch() {
-    if (!save()) { g_status = T("No se pudo escribir xcde.ini"); return; }
+    if (!save()) { g_status = T("No se pudieron guardar los ajustes"); return; }
+    apply_env();  // [XCDE] the variables from the Diagnostics tab (xcde_env.ini); the game inherits them
 #ifdef _WIN32
     std::string exe = path("build/xcde.exe");
     std::string cmd = "\"" + exe + "\" targets";
@@ -741,6 +834,7 @@ static bool pc_running() {
 }
 
 static void pc_start(bool then_play) {
+    apply_env();  // [XCDE] the Diagnostics tab variables also reach the shader precompiler
 #ifdef _WIN32
     if (g_pc_proc) return;
     std::string exe = path("build/xcde.exe");
@@ -1260,6 +1354,56 @@ static void make_report();
 static void tab_diagnostics() {
     if (ImGui::Button(T("Crear reporte"))) make_report();
     ImGui::TextWrapped("%s",g.ui_lang ? "Includes configuration and logs; excludes saves and game files." : "Incluye configuración y registros; excluye partidas y archivos del juego.");
+
+    // [XCDE] environment variables for the game: NAME=VALUE rows, saved to xcde_env.ini and applied when PLAY starts
+    // the game (or the shader precompiler). Useful for the XCDE_* diagnostic switches (e.g. XCDE_RSC_PIXEL=1).
+    ImGui::SeparatorText(T("Variables de entorno"));
+    ImGui::TextWrapped(T("Se pasan al juego al iniciar. Ejemplo: XCDE_RSC_PIXEL=1 (se aplica la próxima vez que pulses JUGAR)."));
+    ImGui::TextDisabled(T("Se guardan en xcde_env.ini (también puedes editarlas ahí)."));
+    int focus_row = -1;  // (an existing blank row is reused instead of adding another one)
+    ImGui::BeginDisabled(g.nenv >= NENV);
+    if (ImGui::Button(T("Añadir variable"))) {
+        for (int i = 0; i < g.nenv; i++) if (!g.env[i].name[0]) { focus_row = i; break; }
+        if (focus_row < 0) {
+            EnvVar &e = g.env[g.nenv++];
+            memset(&e, 0, sizeof e);
+            focus_row = g.nenv - 1;
+        }
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::TextDisabled("%d / %d", g.nenv, NENV);
+    if (ImGui::BeginTable("env_vars", 3, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn(T("Nombre"), ImGuiTableColumnFlags_WidthStretch, 0.36f);
+        ImGui::TableSetupColumn(T("Valor"), ImGuiTableColumnFlags_WidthStretch, 0.64f);
+        ImGui::TableSetupColumn("##remove", ImGuiTableColumnFlags_WidthFixed, 88 * g_scale);
+        ImGui::TableHeadersRow();
+        int remove = -1;
+        for (int i = 0; i < g.nenv; i++) {
+            ImGui::PushID(i);
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            if (i == focus_row) ImGui::SetKeyboardFocusHere();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::InputText("##name", g.env[i].name, sizeof g.env[i].name, ImGuiInputTextFlags_CharsNoBlank);
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::InputText("##value", g.env[i].value, sizeof g.env[i].value);
+            ImGui::TableSetColumnIndex(2);
+            if (ImGui::SmallButton(T("Quitar"))) remove = i;
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+        if (remove >= 0) {
+            for (int i = remove; i + 1 < g.nenv; i++) g.env[i] = g.env[i + 1];
+            g.nenv--;
+        }
+    }
+    if (!g.nenv) ImGui::TextDisabled(T("No hay variables de entorno."));
+    bool bad_name = false;
+    for (int i = 0; i < g.nenv; i++) if (g.env[i].name[0] && !env_name_valid(g.env[i].name)) bad_name = true;
+    if (bad_name) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", T("Nombre no válido: usa letras, números y _ (sin empezar por un número)."));
+
     ensure_adapters();
     ImGui::SeparatorText(g.ui_lang ? "Adapter diagnostics" : "Diagnóstico del adaptador");
     for (uint32_t i=0;i<adapter_count;i++) {
@@ -1593,14 +1737,14 @@ static void scan_mods() {
 }
 
 // [XCDE] "Crear reporte": reports\xcde_report_<date>.zip with what a bug report needs - the last two game logs (this
-// run's and the previous one, build\last_game*.log), every other build\*.log, xcde.ini and the newest crash report (crash\, text + minidump).
+// run's and the previous one, build\last_game*.log), every other build\*.log, xcde.ini / xcde_env.ini and the newest crash report (crash\, text + minidump).
 // No saves or game files. Zipped by the tar.exe that Windows 10+ ships; the folder opens when it is done.
 static void make_report() {
 #ifndef _WIN32
     // [XCDE] T-LINUX: the same files, zipped by bsdtar (libarchive's tar: -a picks the format from .zip)
     std::vector<std::string> files;
     for (const char *f : {"build/last_game.log", "build/last_game.prev.log", "build/last_precompile.log", "build/launcher.log",
-                          "build/lasrecomp.log", "build/lasrecomp.prev.log", "xcde.ini"})
+                          "build/lasrecomp.log", "build/lasrecomp.prev.log", "xcde.ini", "xcde_env.ini"})
         if (exists(f)) files.push_back(f);
     for (const std::string &n : list_dir("build", "*.log")) {
         std::string rel = "build/" + n;
@@ -1627,7 +1771,7 @@ static void make_report() {
 #else
     std::vector<std::string> files;
     for (const char *f : {"build/last_game.log", "build/last_game.prev.log", "build/last_precompile.log", "build/launcher.log",
-                          "build/lasrecomp.log", "build/lasrecomp.prev.log", "xcde.ini"})
+                          "build/lasrecomp.log", "build/lasrecomp.prev.log", "xcde.ini", "xcde_env.ini"})
         if (GetFileAttributesA(path(f).c_str()) != INVALID_FILE_ATTRIBUTES) files.push_back(f);
     WIN32_FIND_DATAA fd;
     {   // [XCDE] T260: any other build\*.log (the report only had xcde.ini: the game log is build\last_game.log, not lasrecomp.log)
@@ -2026,7 +2170,7 @@ int main(int argc, char **argv) {
         bool pending=g_mod_dirty || memcmp(&saved_cfg,&g,sizeof g)!=0;
         if (ImGui::Button(g.ui_lang ? "Apply" : "Aplicar")) {
             if (save()) { memcpy(&saved_cfg,&g,sizeof g); g_mod_dirty=false; g_status=T("Ajustes guardados en xcde.ini"); }
-            else g_status=T("No se pudo escribir xcde.ini");
+            else g_status=T("No se pudieron guardar los ajustes");
         }
         ImGui::SameLine();
         if (ImGui::Button(T("Salir"))) run=false;

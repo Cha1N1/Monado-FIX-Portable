@@ -2,7 +2,7 @@
 # [XCDE] A self-contained game folder to copy to another PC (no msys64, no sources, no build objects).
 #   scripts/make_dist.sh <out dir> [--no-saves]
 # Contents: build/xcde.exe + build/xcde_launcher.exe + every DLL they load from msys64 (copied next to them), the
-# upscaler DLLs, targets/ (exefs + romfs), data/, mods/, xcde.ini, "Play Monado.bat" (without the msys64 PATH), the
+# upscaler DLLs, targets/ (exefs + romfs), data/, mods/, xcde.ini / xcde_env.ini, "Play Monado.bat" (without the msys64 PATH), the
 # portable caches (cache/spirv: SPIR-V, cache/variants.bin: the variants seen in play) and save/ (unless --no-saves).
 # Not copied: cache/vk_pipelines.bin and cache/precompile_done.txt (driver / GPU specific: the launcher precompiles
 # again on the other PC). Files already there with the same size and time are skipped (robocopy), so a second run
@@ -28,6 +28,6 @@ rc data "$out/data"
 [ -d cache/spirv ] && rc cache/spirv "$out/cache/spirv"
 [ -f cache/variants.bin ] && cp -p cache/variants.bin "$out/cache/"
 [ "$saves" = 1 ] && [ -d save ] && rc save "$out/save"
-[ -f xcde.ini ] && cp -p xcde.ini "$out/"
+for settings in xcde.ini xcde_env.ini; do [ -f "$settings" ] && cp -p "$settings" "$out/"; done
 sed 's|^set "PATH=C:\\msys64\\ucrt64\\bin;%PATH%"\r\?$|rem (the DLLs are in build\\)|' "Play Monado.bat" > "$out/Play Monado.bat"
 echo "dist: $out ($(ls "$out/build" | wc -l) files in build/)"
