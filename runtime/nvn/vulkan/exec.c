@@ -234,8 +234,17 @@ static int vk_counter_mode(void) {
     if (counter_mode < 0 && diag_deterministic()) counter_mode = 1;  // [XCDE] T029: one virtual timestamp per frame
     if (counter_mode < 0) {
         const char *e = getenv("LARECOMP_VK_COUNTER");
-        counter_mode = e && !strcmp(e, "cpu") ? 0 : e && !strcmp(e, "frozen") ? 1 : e && !strcmp(e, "legacy") ? 3 : 2;
+        // [XCDE] GitHub #29: the game lowers its scene resolution (to 70 %) from these GPU times, then stretches the image
+        // itself before the upscalers: with frame lag the GPU never idles, the times always looked slow, and FSR / DLSS
+        // got an 896x504 scene - blurry standing still, the jitter magnified. Its timer pairs (start / end slots 32 bytes
+        // apart) never matched the 16-byte pacing pairs below. Default: one timestamp per presented frame, so the game
+        // keeps 1280x720. XCDE_GAME_DYNRES=1 (or LARECOMP_VK_COUNTER=gpu): real GPU times, as on the Switch.
+        const char *dr = getenv("XCDE_GAME_DYNRES");
+        int dflt = dr && atoi(dr) != 0 ? 2 : 1;
+        counter_mode = e && !strcmp(e, "cpu") ? 0 : e && !strcmp(e, "frozen") ? 1 : e && !strcmp(e, "legacy") ? 3 : e && !strcmp(e, "gpu") ? 2 : dflt;
         if (counter_mode == 2 && !g_vk.props.limits.timestampComputeAndGraphics) counter_mode = 0;
+        LOG("[vk] GPU timing counters: %s\n", counter_mode == 1 ? "one per frame (the game keeps its full resolution)" :
+            counter_mode == 2 ? "GPU times" : counter_mode == 0 ? "host clock" : "legacy");
     }
     return counter_mode;
 }
@@ -5837,6 +5846,17 @@ static bool tmp_cam_is_world(uint64_t addr) {
     return w;
 }
 static bool tmp_dm1 = true;          // the scene draws' NVN depth mode (clip z in [-1, 1])
+// [XCDE] GitHub #29: the scene's depth target has the scene's size and aspect (output_scale_base, at least half of it).
+// A world camera bound over another depth target (shadow maps, reflections, a smaller copy) is not the scene's: taking
+// it gave the upscalers the wrong camera and jittered the wrong draws.
+static uint64_t tmp_cam_frame = ~0ull;
+static bool tmp_scene_like(const NvnTexture *d) {
+    extern void output_scale_base(uint32_t *w, uint32_t *h);
+    uint32_t bw, bh;
+    output_scale_base(&bw, &bh);
+    uint64_t w = d->width, h = d->height;
+    return w <= bw && h <= bh && w * 2 > bw && h * 2 > bh && w * bh * 100 >= h * bw * 99 && w * bh * 100 <= h * bw * 101;
+}
 static void tmp_draw(const Prog *pr, float *jx, float *jy) {
     uint64_t fr = renderer_present_count();
     if (fr != tmp_frame) {
@@ -5845,11 +5865,27 @@ static void tmp_draw(const Prog *pr, float *jx, float *jy) {
         tmp_jitter(tmp_jit);
     }
     if (!st.rt.depth) return;
+    bool like = tmp_scene_like(st.rt.depth);
     if (!tmp_cam.ok)
         for (int k = 0; k < 14; k++) {
             const Range *u = &st.ubuf[0][k];
             if (u->addr < HEAP_BASE || u->size < 176) continue;
-            if (tmp_cam_is_world(u->addr) && tmp_cam_check((const float *)(uintptr_t)u->addr, &tmp_cam)) { tmp_depth_tex = st.rt.depth; tmp_dm1 = pr->vkey.depth_minus_one; break; }
+            TmpCamera c = {0};
+            if (!tmp_cam_is_world(u->addr) || !tmp_cam_check((const float *)(uintptr_t)u->addr, &c)) continue;
+            if (!like) {
+                static int nrej;
+                if (nrej < 20) {
+                    nrej++;
+                    LOG("[tmp] frame %llu: camera on a %ux%u depth target: not the scene\n", (unsigned long long)fr,
+                        st.rt.depth->width, st.rt.depth->height);
+                }
+                break;
+            }
+            tmp_cam = c;
+            tmp_depth_tex = st.rt.depth;
+            tmp_dm1 = pr->vkey.depth_minus_one;
+            tmp_cam_frame = fr;
+            break;
         }
     // (the same image: the game draws its prepass and colour passes through different texture objects over one depth)
     TexBackend *db = st.rt.depth->backend, *sb = tmp_depth_tex ? tmp_depth_tex->backend : NULL;
@@ -5857,8 +5893,9 @@ static void tmp_draw(const Prog *pr, float *jx, float *jy) {
     if (nojit < 0) nojit = getenv("XCDE_TMP_NOJITTER") != NULL;  // (tests)
     static int bysize = -1;
     if (bysize < 0) bysize = !getenv("XCDE_TMP_JIT_SAME_IMAGE");
-    bool scene = sb && db && (db->image == sb->image || (bysize && st.rt.depth->width == tmp_depth_tex->width &&
-                                                          st.rt.depth->height == tmp_depth_tex->height));
+    // (by size: a scene-like target while the scene camera is this frame's or the previous one's - the game may draw
+    // into the scene before it binds this frame's camera)
+    bool scene = bysize ? like && tmp_cam_frame != ~0ull && tmp_cam_frame + 1 >= fr : sb && db && db->image == sb->image;
     // [XCDE] T213: nothing after the frame's scene composite (the HUD draws with a depth buffer of the scene's size:
     // it was jittered too - the HUD shook once the HUD mask showed it unblended)
     // [XCDE] T260: world geometry drawn WITHOUT the depth test (sky, water, particles, some effects) was never jittered,
