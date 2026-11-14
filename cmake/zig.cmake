@@ -30,6 +30,12 @@ if(ZIG_TARGET)
     set(CMAKE_SYSTEM_NAME Linux)
   endif()
   set(CMAKE_SYSTEM_PROCESSOR x86_64)
+elseif(CMAKE_HOST_WIN32)
+  # Without -target zig builds its own runtime (compiler_rt: memset, memcpy...) for the build machine's CPU: on an
+  # AVX-512 CI runner monado_fsr4.dll got an AVX-512 memset and crashed (c000001d) on players' CPUs without it.
+  # An explicit target and CPU keep everything, zig's runtime included, at the x86-64-v2 the project requires.
+  set(CMAKE_C_COMPILER_ARG1 "cc -target x86_64-windows-gnu -mcpu=x86_64_v2")
+  set(CMAKE_CXX_COMPILER_ARG1 "c++ -target x86_64-windows-gnu -mcpu=x86_64_v2")
 else()
   set(CMAKE_C_COMPILER_ARG1 cc)
   set(CMAKE_CXX_COMPILER_ARG1 c++)

@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 Z=".venv/Scripts/python -m ziglang c++"
 M=${MSYS2_PREFIX:-/c/msys64/ucrt64}
 mkdir -p build
-$Z -O2 -std=c++20 -march=x86_64_v2 -shared -fvisibility=hidden -Iruntime/nvn/vulkan -idirafter "$M/include" -w \
+$Z -O2 -std=c++20 -target x86_64-windows-gnu -mcpu=x86_64_v2 -shared -fvisibility=hidden -Iruntime/nvn/vulkan -idirafter "$M/include" -w \
   third_party/fsr4_native/fsr411.cpp third_party/fsr4_native/monado_adapter.cpp \
   -o build/monado_fsr4.dll "$M/lib/libvulkan-1.dll.a" || { echo "FAIL fsr4 (FSR 4 Lite will be unavailable)"; exit 1; }
 # The model files: tools/prepare_fsr4_lite.py writes build/fsr4/assets/lite; the runtime reads <exe folder>/fsr4/lite.
